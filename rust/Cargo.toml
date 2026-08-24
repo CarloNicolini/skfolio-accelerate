@@ -1,0 +1,16 @@
+[package]
+name = "skfolio_accel"
+version = "0.1.0"
+edition = "2021"
+license = "BSD-3-Clause"
+description = "Clarabel update engine for skfolio-accelerate"
+
+[lib]
+name = "_skfolio_accel"
+crate-type = ["cdylib"]
+
+[dependencies]
+clarabel = "=0.11.1"
+numpy = "0.22"
+pyo3 = { version = "0.22", features = ["extension-module"] }
+rayon = "1.10"
