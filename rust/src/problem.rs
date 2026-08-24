@@ -5,7 +5,6 @@
 use clarabel::solver::{NonnegativeConeT, SecondOrderConeT, SupportedConeT, ZeroConeT};
 
 #[derive(Clone)]
-#[allow(dead_code)]
 pub struct ProblemPattern {
     pub n_vars: usize,
     pub n_cons: usize,

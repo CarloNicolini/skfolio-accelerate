@@ -64,7 +64,26 @@ def compile_cv_plan(cv, X, y=None) -> CVPlan:
     )
 
 
+def _contiguous_slice(idx: np.ndarray) -> slice | None:
+    if idx.ndim != 1 or idx.size == 0:
+        return None
+    start = int(idx[0])
+    stop = int(idx[-1]) + 1
+    if stop - start != idx.size or start < 0:
+        return None
+    if idx.size == 1 or (int(idx[1]) == start + 1 and int(idx[-1]) == stop - 1):
+        if idx.size > 2 and int(idx[idx.size // 2]) != start + idx.size // 2:
+            return None
+        return slice(start, stop)
+    return None
+
+
 def slice_rows(X: Any, idx: np.ndarray):
+    sl = _contiguous_slice(np.asarray(idx))
+    if sl is not None:
+        if hasattr(X, "iloc"):
+            return X.iloc[sl]
+        return np.asarray(X)[sl]
     if hasattr(X, "iloc"):
         return X.iloc[np.asarray(idx)]
     return np.asarray(X)[np.asarray(idx)]

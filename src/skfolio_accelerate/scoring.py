@@ -21,8 +21,18 @@ from skfolio.measures import (
 from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 
 
+def _as_matrix(X) -> NDArray[np.float64]:
+    if hasattr(X, "to_numpy"):
+        arr = X.to_numpy(copy=False)
+    else:
+        arr = np.asarray(X)
+    if arr.dtype != np.float64:
+        return np.asarray(arr, dtype=np.float64)
+    return arr
+
+
 def portfolio_returns(X, weights: NDArray[np.float64]) -> NDArray[np.float64]:
-    return np.asarray(X, dtype=float) @ np.asarray(weights, dtype=float)
+    return _as_matrix(X) @ np.asarray(weights, dtype=np.float64)
 
 
 def sharpe_ratio(returns: NDArray[np.float64], risk_free_rate: float = 0.0) -> float:
@@ -65,11 +75,18 @@ def _rows(X, idx: NDArray[np.intp]):
     return np.asarray(X)[idx]
 
 
-def attach_weights(estimator, params: dict[str, Any], weights: NDArray[np.float64], X_test):
-    est = clone(estimator)
-    est.set_params(**params)
-    est.weights_ = np.asarray(weights, dtype=float)
-    est.n_features_in_ = int(np.asarray(X_test).shape[1])
+def attach_weights(
+    estimator,
+    params: dict[str, Any],
+    weights: NDArray[np.float64],
+    X_test,
+    scratch=None,
+):
+    est = scratch if scratch is not None else clone(estimator)
+    if params:
+        est.set_params(**params)
+    est.weights_ = np.asarray(weights, dtype=np.float64)
+    est.n_features_in_ = int(_as_matrix(X_test).shape[1])
     if hasattr(X_test, "columns"):
         est.feature_names_in_ = np.asarray(X_test.columns)
     return est
@@ -81,13 +98,14 @@ def score_with_estimator(
     weights: NDArray[np.float64],
     X_test,
     scoring: Any,
+    scratch=None,
 ) -> float:
     """Score a test window. ``scoring=None`` uses the estimator's native score."""
-    est = attach_weights(estimator, params, weights, X_test)
-    if scoring is None:
-        return float(est.score(X_test))
     if isinstance(scoring, (str, RatioMeasure)):
         return score_returns(portfolio_returns(X_test, weights), scoring)
+    est = attach_weights(estimator, params, weights, X_test, scratch=scratch)
+    if scoring is None:
+        return float(est.score(X_test))
     if callable(scoring):
         try:
             return float(scoring(est, X_test))

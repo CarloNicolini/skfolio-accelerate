@@ -70,16 +70,21 @@ def bind_from_estimator(
     moments: FoldMoments,
     estimator,
     params: dict[str, Any],
+    *,
+    data: bool = True,
+    numerical: bool = True,
 ) -> None:
-    bind_twin_values(
-        twin,
-        moments,
-        l1_coef=float(_resolved(estimator, params, "l1_coef", 0.0) or 0.0),
-        l2_coef=float(_resolved(estimator, params, "l2_coef", 0.0) or 0.0),
-        risk_aversion=float(_resolved(estimator, params, "risk_aversion", 1.0) or 1.0),
-        min_return=_resolved(estimator, params, "min_return"),
-        cvar_beta=float(_resolved(estimator, params, "cvar_beta", 0.95) or 0.95),
-    )
+    if data:
+        bind_data_values(twin, moments)
+    if numerical:
+        bind_numerical_values(
+            twin,
+            l1_coef=float(_resolved(estimator, params, "l1_coef", 0.0) or 0.0),
+            l2_coef=float(_resolved(estimator, params, "l2_coef", 0.0) or 0.0),
+            risk_aversion=float(_resolved(estimator, params, "risk_aversion", 1.0) or 1.0),
+            min_return=_resolved(estimator, params, "min_return"),
+            cvar_beta=float(_resolved(estimator, params, "cvar_beta", 0.95) or 0.95),
+        )
 
 
 @dataclass
@@ -243,9 +248,34 @@ def build_mean_risk_twin(
     )
 
 
-def bind_twin_values(
+def _assign_param(param, value) -> None:
+    arr = np.asarray(value, dtype=np.float64)
+    current = param.value
+    if isinstance(current, np.ndarray) and current.shape == arr.shape:
+        np.copyto(current, arr)
+        return
+    param.value = arr
+
+
+def bind_data_values(twin: TwinProblem, moments: FoldMoments) -> None:
+    params = twin.parameters
+    _assign_param(params["mu"], moments.mu)
+    if "L" in params:
+        _assign_param(params["L"], moments.cholesky)
+    if "R" in params:
+        returns = np.asarray(moments.returns, dtype=np.float64)
+        expected_t = twin.n_observations
+        if expected_t is None:
+            raise ValueError("CVaR twin is missing n_observations")
+        if returns.shape[0] != expected_t:
+            raise ValueError(
+                f"CVaR returns length {returns.shape[0]} != template T={expected_t}"
+            )
+        _assign_param(params["R"], returns)
+
+
+def bind_numerical_values(
     twin: TwinProblem,
-    moments: FoldMoments,
     *,
     l1_coef: float = 0.0,
     l2_coef: float = 0.0,
@@ -257,21 +287,33 @@ def bind_twin_values(
     if "l1_coef" in params:
         params["l1_coef"].value = float(l1_coef)
     params["l2_coef"].value = float(l2_coef)
-    params["mu"].value = np.asarray(moments.mu, dtype=float)
-    if "L" in params:
-        params["L"].value = np.asarray(moments.cholesky, dtype=float)
-    if "R" in params:
-        returns = np.asarray(moments.returns, dtype=float)
+    if "cvar_coef" in params:
         expected_t = twin.n_observations
         if expected_t is None:
             raise ValueError("CVaR twin is missing n_observations")
-        if returns.shape[0] != expected_t:
-            raise ValueError(
-                f"CVaR returns length {returns.shape[0]} != template T={expected_t}"
-            )
-        params["R"].value = returns
         params["cvar_coef"].value = 1.0 / (expected_t * (1.0 - float(cvar_beta)))
     if "risk_aversion" in params:
         params["risk_aversion"].value = float(risk_aversion)
     if "min_return" in params and min_return is not None:
         params["min_return"].value = float(min_return)
+
+
+def bind_twin_values(
+    twin: TwinProblem,
+    moments: FoldMoments,
+    *,
+    l1_coef: float = 0.0,
+    l2_coef: float = 0.0,
+    risk_aversion: float = 1.0,
+    min_return: float | None = None,
+    cvar_beta: float = 0.95,
+) -> None:
+    bind_data_values(twin, moments)
+    bind_numerical_values(
+        twin,
+        l1_coef=l1_coef,
+        l2_coef=l2_coef,
+        risk_aversion=risk_aversion,
+        min_return=min_return,
+        cvar_beta=cvar_beta,
+    )

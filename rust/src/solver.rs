@@ -1,6 +1,8 @@
-//! Per-worker Clarabel solver with update_data.
+//! Per-worker Clarabel solver with update_data / update_P.
 
 #![allow(non_snake_case)]
+
+use std::sync::Arc;
 
 use clarabel::algebra::CscMatrix;
 use clarabel::solver::{DefaultSettings, DefaultSolver, IPSolver, SolverStatus};
@@ -20,18 +22,31 @@ pub fn default_settings(solver_threads: u32) -> DefaultSettings<f64> {
 }
 
 pub struct WorkerSolver {
-    pattern: ProblemPattern,
+    pattern: Arc<ProblemPattern>,
     settings: DefaultSettings<f64>,
     solver: Option<DefaultSolver<f64>>,
+    p_buf: Vec<f64>,
+    q_buf: Vec<f64>,
+    a_buf: Vec<f64>,
+    b_buf: Vec<f64>,
 }
 
 impl WorkerSolver {
-    pub fn new(pattern: ProblemPattern, solver_threads: u32) -> Self {
+    pub fn new(pattern: Arc<ProblemPattern>, solver_threads: u32) -> Self {
         Self {
             pattern,
             settings: default_settings(solver_threads),
             solver: None,
+            p_buf: Vec::new(),
+            q_buf: Vec::new(),
+            a_buf: Vec::new(),
+            b_buf: Vec::new(),
         }
+    }
+
+    fn fill(buf: &mut Vec<f64>, src: &[f64]) {
+        buf.clear();
+        buf.extend_from_slice(src);
     }
 
     pub fn solve_instance(
@@ -40,6 +55,8 @@ impl WorkerSolver {
         q: &[f64],
         a_nz: &[f64],
         b: &[f64],
+        update_q: bool,
+        update_a: bool,
     ) -> Result<SolveRecord, String> {
         if self.solver.is_none() {
             let P = CscMatrix::new(
@@ -67,26 +84,45 @@ impl WorkerSolver {
             .map_err(|err| format!("Clarabel setup failed: {err:?}"))?;
             self.solver = Some(solver);
         } else {
+            Self::fill(&mut self.p_buf, p_nz);
             let solver = self.solver.as_mut().unwrap();
             solver
-                .update_data(&p_nz.to_vec(), &q.to_vec(), &a_nz.to_vec(), &b.to_vec())
-                .map_err(|err| format!("Clarabel update_data failed: {err}"))?;
+                .update_P(&self.p_buf)
+                .map_err(|err| format!("Clarabel update_P failed: {err}"))?;
+            if update_q {
+                Self::fill(&mut self.q_buf, q);
+                solver
+                    .update_q(&self.q_buf)
+                    .map_err(|err| format!("Clarabel update_q failed: {err}"))?;
+            }
+            if update_a {
+                Self::fill(&mut self.a_buf, a_nz);
+                Self::fill(&mut self.b_buf, b);
+                solver
+                    .update_A(&self.a_buf)
+                    .map_err(|err| format!("Clarabel update_A failed: {err}"))?;
+                solver
+                    .update_b(&self.b_buf)
+                    .map_err(|err| format!("Clarabel update_b failed: {err}"))?;
+            }
         }
 
         let solver = self.solver.as_mut().unwrap();
         solver.solve();
-        Ok(record_from_solver(solver))
+        Ok(record_from_solver(solver, &self.pattern))
     }
 }
 
-fn record_from_solver(solver: &DefaultSolver<f64>) -> SolveRecord {
+fn record_from_solver(solver: &DefaultSolver<f64>, pattern: &ProblemPattern) -> SolveRecord {
     let status = format!("{:?}", solver.solution.status);
     let solved = matches!(
         solver.solution.status,
         SolverStatus::Solved | SolverStatus::AlmostSolved
     );
+    let start = pattern.weight_start.min(solver.solution.x.len());
+    let end = (pattern.weight_start + pattern.weight_len).min(solver.solution.x.len());
     SolveRecord {
-        x: solver.solution.x.clone(),
+        x: solver.solution.x[start..end].to_vec(),
         status,
         obj: if solved {
             solver.solution.obj_val

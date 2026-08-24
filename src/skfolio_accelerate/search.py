@@ -10,6 +10,7 @@ import numpy as np
 from sklearn.base import BaseEstimator, clone
 from sklearn.model_selection import ParameterGrid
 
+from skfolio import RiskMeasure
 from skfolio.model_selection import BaseCombinatorialCV
 
 from skfolio_accelerate.backends.python_clarabel import PythonClarabelEngine
@@ -29,7 +30,7 @@ from skfolio_accelerate.estimators.mean_risk_twin import (
     build_twin_from_estimator,
     structure_key,
 )
-from skfolio_accelerate.ir import Evaluation, SearchPlan, SolveResult
+from skfolio_accelerate.ir import Evaluation, SearchPlan
 from skfolio_accelerate.moments import FoldCache
 from skfolio_accelerate.profile import acceleration_report
 from skfolio_accelerate.scoring import (
@@ -51,6 +52,14 @@ def _cap_native_threads() -> None:
         "NUMEXPR_NUM_THREADS",
     ):
         os.environ.setdefault(key, "1")
+
+
+def _grid_needs_returns(estimator, param_list: list[dict[str, Any]]) -> bool:
+    for params in param_list:
+        risk = params.get("risk_measure", getattr(estimator, "risk_measure", None))
+        if risk is RiskMeasure.CVAR:
+            return True
+    return False
 
 
 def _solved(status: str) -> bool:
@@ -146,7 +155,7 @@ class MassiveGridSearchCV(BaseEstimator):
             n_jobs=n_jobs,
         )
 
-        cache = FoldCache()
+        cache = FoldCache(keep_returns=_grid_needs_returns(estimator, param_list))
         evaluations: list[Evaluation] = []
         n_templates = 0
         n_updates = 0
@@ -158,6 +167,8 @@ class MassiveGridSearchCV(BaseEstimator):
         templates: dict[str, Any] = {}
         twins: dict[str, Any] = {}
         template_ids: dict[str, int] = {}
+        bound_tokens: dict[str, object] = {}
+        score_scratch = clone(estimator)
 
         schedule = sorted(
             range(len(param_list)),
@@ -175,15 +186,15 @@ class MassiveGridSearchCV(BaseEstimator):
             for param_id in schedule:
                 params = param_list[param_id]
                 data_key = data_fingerprint(params)
-                fold_estimator = clone(estimator)
-                fold_estimator.set_params(
-                    **{
-                        key: value
-                        for key, value in params.items()
-                        if key == "prior_estimator"
-                        or key.startswith("prior_estimator__")
-                    }
-                )
+                prior_params = {
+                    key: value
+                    for key, value in params.items()
+                    if key == "prior_estimator" or key.startswith("prior_estimator__")
+                }
+                fold_estimator = estimator
+                if prior_params:
+                    fold_estimator = clone(estimator)
+                    fold_estimator.set_params(**prior_params)
                 moments = cache.get(
                     fold.fold_id,
                     fold_estimator,
@@ -191,7 +202,9 @@ class MassiveGridSearchCV(BaseEstimator):
                     y_train,
                     data_key=data_key,
                 )
-                n_obs = int(moments.returns.shape[0])
+                n_obs = int(
+                    moments.n_observations or getattr(X_train, "shape", (0,))[0]
+                )
                 n_assets = int(moments.mu.size)
 
                 t_c = time.perf_counter()
@@ -209,6 +222,24 @@ class MassiveGridSearchCV(BaseEstimator):
                         n_assets=n_assets,
                     )
                     templates[key] = extract_problem_template(twins[key], key)
+                    template_ids[key] = n_templates
+                    n_templates += 1
+                compile_s += time.perf_counter() - t_c
+
+                t_i = time.perf_counter()
+                data_token = (fold.fold_id, data_key, key)
+                bind_from_estimator(
+                    twins[key],
+                    moments,
+                    estimator,
+                    params,
+                    data=bound_tokens.get(key) != data_token,
+                    numerical=True,
+                )
+                bound_tokens[key] = data_token
+                instance = instantiate(templates[key], data_token=data_token)
+                instantiate_s += time.perf_counter() - t_i
+                if key not in engines:
                     if use_rust:
                         engines[key] = RustClarabelEngine(
                             templates[key],
@@ -220,15 +251,13 @@ class MassiveGridSearchCV(BaseEstimator):
                             templates[key],
                             solver_threads=self.solver_threads,
                         )
-                    template_ids[key] = n_templates
-                    n_templates += 1
-                compile_s += time.perf_counter() - t_c
-
-                t_i = time.perf_counter()
-                bind_from_estimator(twins[key], moments, estimator, params)
-                instance = instantiate(templates[key])
-                instantiate_s += time.perf_counter() - t_i
                 batches.setdefault(key, []).append((param_id, instance))
+
+            keep_weights = cv_plan.combinatorial
+            n_test = int(fold.test_idx.size)
+            X_test = None
+            if n_test > 0 and not cv_plan.combinatorial:
+                X_test = slice_rows(X, fold.test_idx)
 
             for key, items in batches.items():
                 instances = [instance for _, instance in items]
@@ -241,7 +270,6 @@ class MassiveGridSearchCV(BaseEstimator):
                 n_updates += len(results)
 
                 t_e = time.perf_counter()
-                n_test = int(fold.test_idx.size)
                 for (param_id, _), result in zip(items, results, strict=True):
                     params = param_list[param_id]
                     weights = result.weights
@@ -254,13 +282,13 @@ class MassiveGridSearchCV(BaseEstimator):
                     elif n_test == 0 or cv_plan.combinatorial:
                         score = float("nan")
                     else:
-                        X_test = slice_rows(X, fold.test_idx)
                         score = score_with_estimator(
                             estimator,
                             params,
                             weights,
                             X_test,
                             scoring=self.scoring,
+                            scratch=score_scratch,
                         )
                     evaluations.append(
                         Evaluation(
@@ -268,10 +296,10 @@ class MassiveGridSearchCV(BaseEstimator):
                             fold_id=fold.fold_id,
                             param_id=param_id,
                             params=params,
-                            weights=weights,
+                            weights=weights if keep_weights else None,
                             score=score,
                             n_test=n_test,
-                            path_ids=list(fold.path_ids),
+                            path_ids=list(fold.path_ids) if keep_weights else [],
                             status=result.status,
                         )
                     )

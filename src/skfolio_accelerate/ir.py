@@ -61,30 +61,41 @@ class ProblemTemplate:
     n_assets: int
     scale_objective: float
     scale_constraints: float
+    P_shape: tuple[int, int] = (0, 0)
+    A_shape: tuple[int, int] = (0, 0)
+    P_indices: NDArray[np.int32] = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    P_indptr: NDArray[np.int32] = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    A_indices: NDArray[np.int32] = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    A_indptr: NDArray[np.int32] = field(
+        default_factory=lambda: np.zeros(0, dtype=np.int32)
+    )
+    instantiator: Any = field(default=None, repr=False, compare=False)
 
 
 @dataclass
 class NumericInstance:
+    """Numeric CSC values only; index arrays live on the template."""
+
     P_data: NDArray[np.float64]
     q: NDArray[np.float64]
     A_data: NDArray[np.float64]
     b: NDArray[np.float64]
-    P_shape: tuple[int, int]
-    A_shape: tuple[int, int]
-    P_indices: NDArray[np.int32]
-    P_indptr: NDArray[np.int32]
-    A_indices: NDArray[np.int32]
-    A_indptr: NDArray[np.int32]
 
 
 @dataclass
 class SolveResult:
     status: str
     weights: NDArray[np.float64]
-    x: NDArray[np.float64]
-    objective: float
-    iterations: int
-    solve_time: float
+    x: NDArray[np.float64] = field(default_factory=lambda: np.zeros(0))
+    objective: float = float("nan")
+    iterations: int = 0
+    solve_time: float = 0.0
 
 
 @dataclass
