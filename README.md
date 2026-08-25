@@ -63,12 +63,30 @@ PYTHONPATH=src python benchmarks/benchmark_multipath.py --quick
 ```
 
 The frozen MRC workload is `FLAGSHIP_MRC` in
-[`src/skfolio_accelerate/flagship.py`](src/skfolio_accelerate/flagship.py)
-(10y-scale daily frame, Palomar-style subsamples × monthly walk-forward).
+[`src/skfolio_accelerate/flagship.py`](src/skfolio_accelerate/flagship.py):
+10y-scale daily frame (2520×80), Palomar-style **500 subsamples** of 25 assets
+on 3-year windows, monthly `WalkForward(train=252, test=21)` → **12 000**
+MeanRisk fits.
 
-Results are filled in after `benchmarks/benchmark_multipath.py` on this
-machine. The pass bar is **≥10× wall-clock** with moments+solve+eval
-**≥70% of the skfolio baseline**.
+Hardware: cloud VM, Python 3.12, skfolio 1.0.0, OSQP 1.1.3, Clarabel 0.11.1,
+`os.cpu_count()=4`, BLAS threads capped at 1. Factor-model synthetic dailies.
+
+| Workload | skfolio `cross_val_predict` | Compact engine | Speedup |
+|---|---|---|---|
+| **FLAGSHIP MRC VARIANCE** (12 000 solves) | **28.99 s** (`n_jobs=-1`) | **2.59 s** (`n_jobs=1`) | **11.2×** |
+| CPCV smoke (15 combinations) | 0.087 s (`n_jobs=-1`) | 0.004 s | **20×** |
+| WalkForward CVaR (24 steps, sequential) | 0.360 s (`n_jobs=1`) | 0.127 s | **2.8×** |
+
+FLAGSHIP MRC VARIANCE phase report:
+
+- Baseline sample `MeanRisk.fit` on a 252×25 window: **8.2 ms** (empirical prior **1.4 ms**, QP **6.8 ms**). That kernel is essentially **all** of the 29 s baseline (joblib-parallelized).
+- Compact: moments **0.40 s**, OSQP (warm-started) **1.29 s**, path assembly **0.41 s**, wall **2.59 s** (81% in those three phases).
+- **500** prior cold starts vs **12 000** solves; **11 500** sliding Gram updates and solver warm starts.
+- Path Sharpe vs skfolio: max \|Δ\| **2.1×10⁻⁴**.
+
+The pass bar was ≥10× wall-clock with the accelerated kernels ≥70% of the baseline job. Both hold for the VARIANCE MRC flagship.
+
+CVaR uses a compact Clarabel LP (correct to ~1e-7 in weights). It is the right kernel when `T` is large; on a 24-step WalkForward it is only a modest win against sequential skfolio because each LP is already cheap.
 
 ## Usage: compiled grid search (secondary)
 

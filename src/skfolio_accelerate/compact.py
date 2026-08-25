@@ -116,10 +116,10 @@ class MinVarianceOSQP:
             u=self._u,
             verbose=False,
             warm_starting=True,
-            polishing=True,
+            polishing=False,
             eps_abs=1e-8,
             eps_rel=1e-8,
-            max_iter=10000,
+            max_iter=4000,
         )
 
     def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:

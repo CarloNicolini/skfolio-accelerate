@@ -13,8 +13,6 @@ from sklearn.base import clone
 
 from skfolio import RiskMeasure
 from skfolio.model_selection import cross_val_predict
-from skfolio.optimization import MeanRisk
-from skfolio.optimization.convex import ObjectiveFunction
 
 from skfolio_accelerate.backends.sklearn_fallback import acceleration_blocked_reason
 from skfolio_accelerate.compact import EngineCache, estimator_spec
@@ -277,7 +275,7 @@ def massive_cross_val_predict(
         if jobs == 1 or len(batches) == 1:
             parts = [_run_custom(batch) for batch in batches]
         else:
-            parts = Parallel(n_jobs=jobs)(
+            parts = Parallel(n_jobs=jobs, prefer="threads")(
                 delayed(_run_custom)(batch) for batch in batches
             )
         merged = _merge_batch_results(list(parts))
@@ -295,7 +293,7 @@ def massive_cross_val_predict(
                 for batch in batches
             ]
         else:
-            parts = Parallel(n_jobs=jobs)(
+            parts = Parallel(n_jobs=jobs, prefer="threads")(
                 delayed(_run_fold_batch)(
                     x_arr,
                     batch,
@@ -385,7 +383,3 @@ def native_plan_sharpes(X, cv_plan, weights_by_fold: dict[int, np.ndarray]) -> n
     return np.asarray(
         [native_path_sharpe(X, items) for items in path_items], dtype=np.float64
     )
-
-
-# Silence unused import for type checkers; MeanRisk is the supported estimator.
-_ = (MeanRisk, ObjectiveFunction)

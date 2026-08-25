@@ -31,7 +31,7 @@ def factor_returns(
 FLAGSHIP_MRC = {
     "n_obs": 2520,
     "n_assets": 80,
-    "n_subsamples": 80,
+    "n_subsamples": 500,
     "asset_subset_size": 25,
     "window_size": 3 * 252,
     "train_size": 252,

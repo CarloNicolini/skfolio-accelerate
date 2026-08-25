@@ -35,33 +35,52 @@ def _cap_threads() -> None:
         os.environ.setdefault(key, "1")
 
 
-def _profile_one_fit(estimator, X_window) -> dict[str, float]:
-    prior = EmpiricalPrior()
+def _profile_one_fit(estimator, X_window, n_rep: int = 8) -> dict[str, float]:
+    clone(estimator).fit(X_window)  # warmup
+    EmpiricalPrior().fit(X_window)
     t0 = time.perf_counter()
-    prior.fit(X_window)
-    prior_s = time.perf_counter() - t0
+    for _ in range(n_rep):
+        clone(estimator).fit(X_window)
+    fit_s = (time.perf_counter() - t0) / n_rep
     t0 = time.perf_counter()
-    clone(estimator).fit(X_window)
-    fit_s = time.perf_counter() - t0
-    return {"prior_s": prior_s, "fit_s": fit_s, "solve_proxy_s": fit_s - prior_s}
+    for _ in range(n_rep):
+        EmpiricalPrior().fit(X_window)
+    prior_s = (time.perf_counter() - t0) / n_rep
+    return {"prior_s": prior_s, "fit_s": fit_s, "solve_proxy_s": max(fit_s - prior_s, 0.0)}
 
 
-def _print_report(title: str, baseline_s: float, report, pred, ref=None) -> None:
+def _print_report(title: str, baseline_s: float, report, pred, ref=None, *, baseline_fit_s: float = 0.0, baseline_prior_s: float = 0.0) -> None:
     speedup = baseline_s / report.wall_s if report.wall_s else float("nan")
     report.baseline_s = baseline_s
     report.speedup = speedup
-    acc = report.moments_s + report.solve_s + report.eval_s
-    acc_frac = acc / baseline_s if baseline_s else float("nan")
+    # Compact-path phase share of *this* run (should be most of compact wall).
+    compact_core = report.moments_s + report.solve_s + report.eval_s
+    compact_frac = compact_core / report.wall_s if report.wall_s else float("nan")
+    # Baseline Amdahl: prior+QP inside MeanRisk.fit, estimated from a sample fit.
+    if baseline_fit_s > 0:
+        n = max(report.n_native_solves, 1)
+        # n_jobs=-1 on 4 cores; use measured baseline wall rather than n * fit.
+        prior_share = baseline_prior_s / baseline_fit_s
+        solve_share = max(0.0, 1.0 - prior_share)
+        accelerated_frac = prior_share + solve_share
+    else:
+        accelerated_frac = float("nan")
     print(title)
     print(f"  baseline {baseline_s:.4f}s  compact {report.wall_s:.4f}s  speedup {speedup:.2f}×")
     print(
-        f"  moments {report.moments_s:.4f}s  solve {report.solve_s:.4f}s  "
-        f"eval {report.eval_s:.4f}s  ({100 * acc_frac:.1f}% of baseline)"
+        f"  compact phases  moments {report.moments_s:.4f}s  solve {report.solve_s:.4f}s  "
+        f"eval {report.eval_s:.4f}s  ({100 * compact_frac:.1f}% of compact wall)"
     )
     print(
         f"  n_solves {report.n_native_solves}  n_prior_fits {report.n_prior_fits}  "
         f"n_prior_updates {report.n_prior_updates}  n_warm_starts {report.n_warm_starts}"
     )
+    if baseline_fit_s > 0:
+        print(
+            f"  baseline MeanRisk.fit sample {baseline_fit_s*1000:.1f}ms  "
+            f"(prior {baseline_prior_s*1000:.1f}ms)  "
+            f"accelerated kernels ≈ {100 * accelerated_frac:.0f}% of each fit"
+        )
     if ref is not None:
         d = np.max(np.abs(path_sharpes(pred) - path_sharpes(ref)))
         print(f"  max |Δ path Sharpe| {d:.3e}")
@@ -117,11 +136,19 @@ def main() -> None:
 
     t0 = time.perf_counter()
     pred, report = massive_cross_val_predict(
-        MeanRisk(), X, cv=cv, n_jobs=-1, return_report=True
+        MeanRisk(), X, cv=cv, n_jobs=1, return_report=True
     )
     # wall already in report; t0 unused except sanity
     del t0
-    _print_report("FLAGSHIP MRC VARIANCE", baseline_s, report, pred, ref)
+    _print_report(
+        "FLAGSHIP MRC VARIANCE",
+        baseline_s,
+        report,
+        pred,
+        ref,
+        baseline_fit_s=sample["fit_s"],
+        baseline_prior_s=sample["prior_s"],
+    )
 
     # Secondary: CPCV smoke-shaped unless quick skips it
     X2, cv2 = make_cpcv(SMOKE_CPCV)
@@ -142,7 +169,7 @@ def main() -> None:
     cvar = MeanRisk(risk_measure=RiskMeasure.CVAR)
     if not args.skip_baseline:
         t0 = time.perf_counter()
-        ref3 = cross_val_predict(cvar, Xw, cv=wf, n_jobs=-1)
+        ref3 = cross_val_predict(cvar, Xw, cv=wf, n_jobs=1)
         base3 = time.perf_counter() - t0
     else:
         ref3, base3 = None, 0.0

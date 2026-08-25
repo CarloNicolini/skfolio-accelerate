@@ -189,11 +189,16 @@ def make_segment_portfolio(
     cols: NDArray[np.intp] | None = None,
     *,
     name: str = "MeanRisk",
+    x_np: NDArray[np.float64] | None = None,
 ) -> Portfolio:
-    from skfolio_accelerate.cv_plan import slice_panel
-
-    x_test = slice_panel(X, idx, cols)
-    return Portfolio(X=x_test, weights=np.asarray(weights, dtype=np.float64), name=name)
+    matrix = _as_matrix(X) if x_np is None else x_np
+    rows = np.asarray(idx, dtype=np.intp)
+    w = np.asarray(weights, dtype=np.float64)
+    if cols is None:
+        x_test = matrix[rows]
+    else:
+        x_test = matrix[np.ix_(rows, np.asarray(cols, dtype=np.intp))]
+    return Portfolio(X=x_test, weights=w, name=name)
 
 
 def assemble_prediction(
@@ -216,6 +221,7 @@ def assemble_prediction(
     del build_portfolios
     extra = {} if portfolio_params is None else dict(portfolio_params)
     extra.setdefault("check_observations_order", False)
+    x_np = _as_matrix(X)
 
     if cv_plan.combinatorial:
         path_lists: list[list[Portfolio]] = [[] for _ in range(cv_plan.n_paths)]
@@ -225,7 +231,9 @@ def assemble_prediction(
                 if len(seg) == 0:
                     continue
                 path_lists[path_id].append(
-                    make_segment_portfolio(X, w, seg, fold.asset_idx, name=name)
+                    make_segment_portfolio(
+                        X, w, seg, fold.asset_idx, name=name, x_np=x_np
+                    )
                 )
         pop_name = extra.pop("name", "path")
         extra.pop("check_observations_order", None)
@@ -249,7 +257,7 @@ def assemble_prediction(
             w = weights_by_fold[fold.fold_id]
             path_lists[fold.path_id].append(
                 make_segment_portfolio(
-                    X, w, fold.test_idx, fold.asset_idx, name=name
+                    X, w, fold.test_idx, fold.asset_idx, name=name, x_np=x_np
                 )
             )
         pop_name = extra.pop("name", "path")
@@ -276,6 +284,7 @@ def assemble_prediction(
             fold.test_idx,
             fold.asset_idx,
             name=name,
+            x_np=x_np,
         )
         for fold in ordered
         if fold.test_idx.size

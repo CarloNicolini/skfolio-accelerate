@@ -102,8 +102,12 @@ def _compile_cpcv(splitter, X, y=None) -> CVPlan:
 
 
 def _compile_mrc(splitter, X, y=None) -> CVPlan:
+    splits = list(splitter.split(X, y))
+    path_ids = np.asarray(splitter.get_path_ids())
     folds: list[FoldSpec] = []
-    for fold_id, (train, test, assets) in enumerate(splitter.split(X, y)):
+    for fold_id, ((train, test, assets), path_id) in enumerate(
+        zip(splits, path_ids, strict=True)
+    ):
         test_idx = np.asarray(test, dtype=np.intp)
         folds.append(
             FoldSpec(
@@ -111,11 +115,10 @@ def _compile_mrc(splitter, X, y=None) -> CVPlan:
                 train_idx=np.asarray(train, dtype=np.intp),
                 test_idx=test_idx,
                 test_segments=[test_idx],
-                path_ids=[int(splitter.get_path_ids()[fold_id])],
+                path_ids=[int(path_id)],
                 asset_idx=np.asarray(assets, dtype=np.intp),
             )
         )
-    path_ids = np.asarray(splitter.get_path_ids())
     n_paths = int(path_ids.max()) + 1 if path_ids.size else 1
     return CVPlan(
         splitter_name=type(splitter).__name__,
