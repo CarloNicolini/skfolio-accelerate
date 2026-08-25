@@ -73,14 +73,14 @@ MeanRisk fits.
 
 | Workload | skfolio `cross_val_predict` | Compact engine | Speedup |
 |---|---|---|---|
-| **FLAGSHIP MRC VARIANCE** (12 000 solves) | **28.99 s** (`n_jobs=-1`) | **2.59 s** (`n_jobs=1`) | **11.2×** |
-| CPCV smoke (15 combinations) | 0.087 s (`n_jobs=-1`) | 0.004 s | **20×** |
+| **FLAGSHIP MRC VARIANCE** (12 000 solves) | **29.25 s** (`n_jobs=-1`) | **2.55 s** (sequential) | **11.5×** |
+| CPCV smoke (15 combinations) | 0.093 s (`n_jobs=-1`) | 0.004 s | **21×** |
 | WalkForward CVaR (24 steps, sequential) | 0.360 s (`n_jobs=1`) | 0.127 s | **2.8×** |
 
 FLAGSHIP MRC VARIANCE phase report:
 
-- Baseline sample `MeanRisk.fit` on a 252×25 window: **8.2 ms** (empirical prior **1.4 ms**, QP **6.8 ms**).
-- Compact: moments **0.40 s**, OSQP (warm-started) **1.29 s**, path assembly **0.41 s**, wall **2.59 s**.
+- Baseline sample `MeanRisk.fit` on a 252×25 window: **8.1 ms** (empirical prior **1.4 ms**, QP **6.7 ms**).
+- Compact: moments **0.31 s**, OSQP (warm-started) **1.29 s**, path assembly **0.45 s**, wall **2.55 s**.
 - **500** prior cold starts vs **12 000** solves; **11 500** sliding Gram updates and solver warm starts.
 - Path Sharpe vs skfolio: max \|Δ\| **2.1×10⁻⁴**.
 
