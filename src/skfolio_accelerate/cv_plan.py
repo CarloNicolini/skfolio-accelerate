@@ -2,14 +2,44 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass, field
 
 import numpy as np
+from numpy.typing import NDArray
 from sklearn.model_selection import check_cv
 
 from skfolio.model_selection import BaseCombinatorialCV, MultipleRandomizedCV
 
-from skfolio_accelerate.ir import CVPlan, FoldSpec
+
+@dataclass
+class FoldSpec:
+    """One train/test split, with optional combinatorial test segments."""
+
+    fold_id: int
+    train_idx: NDArray[np.intp]
+    test_idx: NDArray[np.intp]
+    test_segments: list[NDArray[np.intp]] = field(default_factory=list)
+    path_ids: list[int] = field(default_factory=list)
+    asset_idx: NDArray[np.intp] | None = None
+    train_block_ids: tuple[int, ...] = ()
+
+    @property
+    def path_id(self) -> int:
+        return int(self.path_ids[0]) if self.path_ids else 0
+
+
+@dataclass
+class CVPlan:
+    splitter_name: str
+    folds: list[FoldSpec]
+    n_paths: int = 1
+    combinatorial: bool = False
+    multi_path: bool = False
+    kind: str = "kfold"
+
+    @property
+    def n_splits(self) -> int:
+        return len(self.folds)
 
 
 def cpcv_fold_blocks(n_samples: int, n_folds: int) -> list[np.ndarray]:
@@ -37,12 +67,13 @@ def compile_cv_plan(cv, X, y=None) -> CVPlan:
     folds: list[FoldSpec] = []
     for fold_id, split in enumerate(splitter.split(X, y)):
         train, test = split[:2]
+        test_idx = np.asarray(test, dtype=np.intp)
         folds.append(
             FoldSpec(
                 fold_id=fold_id,
                 train_idx=np.asarray(train, dtype=np.intp),
-                test_idx=np.asarray(test, dtype=np.intp),
-                test_segments=[np.asarray(test, dtype=np.intp)],
+                test_idx=test_idx,
+                test_segments=[test_idx],
                 path_ids=[0],
             )
         )
@@ -75,9 +106,8 @@ def _compile_cpcv(splitter, X, y=None) -> CVPlan:
             np.concatenate(segments) if segments else np.array([], dtype=np.intp)
         )
         train_idx = np.asarray(train, dtype=np.intp)
-        if purged or embargo:
-            train_blocks: tuple[int, ...] = ()
-        else:
+        train_blocks: tuple[int, ...] = ()
+        if not (purged or embargo):
             train_blocks = tuple(
                 int(v) for v in sorted(set(fold_of[train_idx].tolist()))
             )
@@ -128,39 +158,3 @@ def _compile_mrc(splitter, X, y=None) -> CVPlan:
         multi_path=True,
         kind="mrc",
     )
-
-
-def _contiguous_slice(idx: np.ndarray) -> slice | None:
-    if idx.ndim != 1 or idx.size == 0:
-        return None
-    start = int(idx[0])
-    stop = int(idx[-1]) + 1
-    if stop - start != idx.size or start < 0:
-        return None
-    if idx.size == 1 or (int(idx[1]) == start + 1 and int(idx[-1]) == stop - 1):
-        if idx.size > 2 and int(idx[idx.size // 2]) != start + idx.size // 2:
-            return None
-        return slice(start, stop)
-    return None
-
-
-def slice_rows(X: Any, idx: np.ndarray):
-    sl = _contiguous_slice(np.asarray(idx))
-    if sl is not None:
-        if hasattr(X, "iloc"):
-            return X.iloc[sl]
-        return np.asarray(X)[sl]
-    if hasattr(X, "iloc"):
-        return X.iloc[np.asarray(idx)]
-    return np.asarray(X)[np.asarray(idx)]
-
-
-def slice_panel(X: Any, rows: np.ndarray, cols: np.ndarray | None = None):
-    """Slice observations and optional asset columns, preserving DataFrame metadata."""
-    sub = slice_rows(X, rows)
-    if cols is None:
-        return sub
-    col_idx = np.asarray(cols)
-    if hasattr(sub, "iloc"):
-        return sub.iloc[:, col_idx]
-    return np.asarray(sub)[:, col_idx]

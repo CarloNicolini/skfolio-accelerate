@@ -16,13 +16,12 @@ import numpy as np
 from sklearn.base import clone
 
 from skfolio import RiskMeasure
-from skfolio.model_selection import WalkForward, cross_val_predict
+from skfolio.model_selection import WalkForward, cross_val_predict as skfolio_cv_predict
 from skfolio.optimization import MeanRisk
 from skfolio.prior import EmpiricalPrior
 
-from skfolio_accelerate import massive_cross_val_predict, path_sharpes
+from skfolio_accelerate import cross_val_predict, path_sharpes
 from skfolio_accelerate.flagship import FLAGSHIP_MRC, SMOKE_CPCV, make_cpcv, make_mrc
-from skfolio_accelerate.moments import empirical_from_window
 
 
 def _cap_threads() -> None:
@@ -58,8 +57,6 @@ def _print_report(title: str, baseline_s: float, report, pred, ref=None, *, base
     compact_frac = compact_core / report.wall_s if report.wall_s else float("nan")
     # Baseline Amdahl: prior+QP inside MeanRisk.fit, estimated from a sample fit.
     if baseline_fit_s > 0:
-        n = max(report.n_native_solves, 1)
-        # n_jobs=-1 on 4 cores; use measured baseline wall rather than n * fit.
         prior_share = baseline_prior_s / baseline_fit_s
         solve_share = max(0.0, 1.0 - prior_share)
         accelerated_frac = prior_share + solve_share
@@ -72,7 +69,7 @@ def _print_report(title: str, baseline_s: float, report, pred, ref=None, *, base
         f"eval {report.eval_s:.4f}s  ({100 * compact_frac:.1f}% of compact wall)"
     )
     print(
-        f"  n_solves {report.n_native_solves}  n_prior_fits {report.n_prior_fits}  "
+        f"  n_solves {report.n_solves}  n_prior_fits {report.n_prior_fits}  "
         f"n_prior_updates {report.n_prior_updates}  n_warm_starts {report.n_warm_starts}"
     )
     if baseline_fit_s > 0:
@@ -122,22 +119,16 @@ def main() -> None:
         f"single MeanRisk.fit {sample['fit_s']*1000:.1f}ms  "
         f"(prior {sample['prior_s']*1000:.1f}ms  rest {sample['solve_proxy_s']*1000:.1f}ms)"
     )
-    compact_moments = empirical_from_window(
-        window.to_numpy(), keep_returns=False
-    )
-    del compact_moments
 
     baseline_s = 0.0
     ref = None
     if not args.skip_baseline:
         t0 = time.perf_counter()
-        ref = cross_val_predict(MeanRisk(), X, cv=cv, n_jobs=-1)
+        ref = skfolio_cv_predict(MeanRisk(), X, cv=cv, n_jobs=-1)
         baseline_s = time.perf_counter() - t0
 
     t0 = time.perf_counter()
-    pred, report = massive_cross_val_predict(
-        MeanRisk(), X, cv=cv, n_jobs=1, return_report=True
-    )
+    pred, report = cross_val_predict(MeanRisk(), X, cv=cv, return_report=True)
     # wall already in report; t0 unused except sanity
     del t0
     _print_report(
@@ -154,13 +145,11 @@ def main() -> None:
     X2, cv2 = make_cpcv(SMOKE_CPCV)
     if not args.skip_baseline:
         t0 = time.perf_counter()
-        ref2 = cross_val_predict(MeanRisk(), X2, cv=cv2, n_jobs=-1)
+        ref2 = skfolio_cv_predict(MeanRisk(), X2, cv=cv2, n_jobs=-1)
         base2 = time.perf_counter() - t0
     else:
         ref2, base2 = None, 0.0
-    pred2, report2 = massive_cross_val_predict(
-        MeanRisk(), X2, cv=cv2, n_jobs=1, return_report=True
-    )
+    pred2, report2 = cross_val_predict(MeanRisk(), X2, cv=cv2, return_report=True)
     _print_report("SMOKE CPCV VARIANCE", base2, report2, pred2, ref2)
 
     # CVaR kernel sample on walk-forward (smaller)
@@ -169,15 +158,14 @@ def main() -> None:
     cvar = MeanRisk(risk_measure=RiskMeasure.CVAR)
     if not args.skip_baseline:
         t0 = time.perf_counter()
-        ref3 = cross_val_predict(cvar, Xw, cv=wf, n_jobs=1)
+        ref3 = skfolio_cv_predict(cvar, Xw, cv=wf, n_jobs=1)
         base3 = time.perf_counter() - t0
     else:
         ref3, base3 = None, 0.0
-    pred3, report3 = massive_cross_val_predict(
+    pred3, report3 = cross_val_predict(
         MeanRisk(risk_measure=RiskMeasure.CVAR),
         Xw,
         cv=wf,
-        n_jobs=1,
         return_report=True,
     )
     _print_report("WALKFORWARD CVaR", base3, report3, pred3, ref3)

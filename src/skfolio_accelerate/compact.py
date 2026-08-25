@@ -18,7 +18,6 @@ from numpy.typing import NDArray
 from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
-from skfolio_accelerate.backends.python_clarabel import clarabel_settings
 from skfolio_accelerate.moments import FoldMoments
 
 
@@ -57,24 +56,36 @@ def _upper_data(matrix: NDArray[np.float64]) -> NDArray[np.float64]:
     return np.concatenate([matrix[: col + 1, col] for col in range(n)])
 
 
+def _clarabel_settings() -> clarabel.DefaultSettings:
+    settings = clarabel.DefaultSettings()
+    settings.verbose = False
+    if hasattr(settings, "presolve_enable"):
+        settings.presolve_enable = False
+    if hasattr(settings, "chordal_decomposition_enable"):
+        settings.chordal_decomposition_enable = False
+    if hasattr(settings, "input_sparse_dropzeros"):
+        settings.input_sparse_dropzeros = False
+    if hasattr(settings, "max_threads"):
+        settings.max_threads = 1
+    if hasattr(settings, "tol_gap_abs"):
+        settings.tol_gap_abs = 1e-9
+    if hasattr(settings, "tol_gap_rel"):
+        settings.tol_gap_rel = 1e-9
+    return settings
+
+
 def estimator_spec(estimator) -> dict[str, Any]:
-    n_hint = getattr(estimator, "n_features_in_", None)
-    min_w = getattr(estimator, "min_weights", 0.0)
-    max_w = getattr(estimator, "max_weights", 1.0)
     return {
         "risk_measure": getattr(estimator, "risk_measure", RiskMeasure.VARIANCE),
         "objective": getattr(
             estimator, "objective_function", ObjectiveFunction.MINIMIZE_RISK
         ),
-        "l1_coef": float(getattr(estimator, "l1_coef", 0.0) or 0.0),
         "l2_coef": float(getattr(estimator, "l2_coef", 0.0) or 0.0),
         "risk_aversion": float(getattr(estimator, "risk_aversion", 1.0) or 1.0),
-        "min_return": getattr(estimator, "min_return", None),
         "cvar_beta": float(getattr(estimator, "cvar_beta", 0.95) or 0.95),
-        "min_weights": min_w,
-        "max_weights": max_w,
+        "min_weights": getattr(estimator, "min_weights", 0.0),
+        "max_weights": getattr(estimator, "max_weights", 1.0),
         "budget": float(getattr(estimator, "budget", 1.0) or 1.0),
-        "n_hint": n_hint,
     }
 
 
@@ -136,15 +147,13 @@ class MinVarianceOSQP:
         q = self._q
         if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
             q = -np.ascontiguousarray(moments.mu, dtype=np.float64)
-        px = _upper_data(p_dense)
-        self._prob.update(Px=px, q=q)
+        self._prob.update(Px=_upper_data(p_dense), q=q)
         if warm and self._x is not None:
             self._prob.warm_start(x=self._x, y=self._y)
             self.n_warm_starts += 1
         result = self._prob.solve(raise_error=False)
         status = str(result.info.status).lower()
         if "solved" not in status:
-            # Cold retry with a ridge if the KKT is numerically nonconvex.
             p_dense = p_dense + 1e-10 * np.eye(n)
             self._prob.update(Px=_upper_data(p_dense))
             result = self._prob.solve(raise_error=False)
@@ -206,7 +215,7 @@ class CVaRClarabel:
             put(1 + j, j, -1.0)
             put(1 + n + j, j, 1.0)
             for k in range(t):
-                put(1 + 2 * n + t + k, j, 0.0)  # -R placeholder
+                put(1 + 2 * n + t + k, j, 0.0)
         for k in range(t):
             put(1 + 2 * n + t + k, n, -1.0)
         for k in range(t):
@@ -244,21 +253,15 @@ class CVaRClarabel:
             p_data[:] = 2.0 * self.l2
         p_idx = np.arange(n, dtype=np.int32)
         p_ptr = np.arange(n + 1, dtype=np.int32)
-        # P is diagonal on w only; remaining vars have empty columns.
-        p_ptr_full = np.concatenate(
-            [p_ptr, np.full(nv - n, n, dtype=np.int32)]
-        )
+        p_ptr_full = np.concatenate([p_ptr, np.full(nv - n, n, dtype=np.int32)])
         if self.l2 == 0.0:
             self._P = sp.csc_matrix((nv, nv))
         else:
-            self._P = sp.csc_matrix(
-                (p_data, p_idx, p_ptr_full), shape=(nv, nv)
-            )
-        cones = [
+            self._P = sp.csc_matrix((p_data, p_idx, p_ptr_full), shape=(nv, nv))
+        self._cones = [
             clarabel.ZeroConeT(1),
             clarabel.NonnegativeConeT(n_cons - 1),
         ]
-        self._cones = cones
         self.solver = None
 
     def _bind_R(self, returns: NDArray[np.float64]) -> None:
@@ -285,7 +288,7 @@ class CVaRClarabel:
         self._bind_R(moments.returns)
         self._bind_q(moments)
         assert self._A is not None and self._q is not None and self._b is not None
-        settings = clarabel_settings(solver_threads=1, verbose=False)
+        settings = _clarabel_settings()
         if self.solver is None:
             self.solver = clarabel.DefaultSolver(
                 self._P, self._q, self._A, self._b, self._cones, settings
