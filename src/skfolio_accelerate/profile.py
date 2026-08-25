@@ -45,6 +45,11 @@ def acceleration_report(
     fallback_reason: str | None,
     n_templates: int | None = None,
     dpp: str = "compatible",
+    moments_s: float = 0.0,
+    n_prior_updates: int = 0,
+    n_warm_starts: int = 0,
+    baseline_s: float = 0.0,
+    speedup: float = float("nan"),
 ) -> AccelerationReport:
     del n_folds
     return AccelerationReport(
@@ -53,12 +58,17 @@ def acceleration_report(
         n_templates=int(n_templates if n_templates is not None else n_solves),
         n_evaluations=int(n_updates if n_updates else n_params),
         n_prior_fits=int(n_prior_fits),
+        n_prior_updates=int(n_prior_updates),
         n_native_solves=int(n_updates),
         n_updates=int(n_updates),
+        n_warm_starts=int(n_warm_starts),
         fallback_reason=fallback_reason,
         compile_s=float(compile_s),
         instantiate_s=float(instantiate_s),
+        moments_s=float(moments_s),
         solve_s=float(solve_s),
         eval_s=float(eval_s),
         wall_s=float(wall_s),
+        baseline_s=float(baseline_s),
+        speedup=float(speedup),
     )

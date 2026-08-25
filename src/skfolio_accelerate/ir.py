@@ -26,10 +26,16 @@ class FoldSpec:
     test_idx: NDArray[np.intp]
     test_segments: list[NDArray[np.intp]] = field(default_factory=list)
     path_ids: list[int] = field(default_factory=list)
+    asset_idx: NDArray[np.intp] | None = None
+    train_block_ids: tuple[int, ...] = ()
 
     @property
     def n_train(self) -> int:
         return int(self.train_idx.size)
+
+    @property
+    def path_id(self) -> int:
+        return int(self.path_ids[0]) if self.path_ids else 0
 
 
 @dataclass
@@ -38,6 +44,8 @@ class CVPlan:
     folds: list[FoldSpec]
     n_paths: int = 1
     combinatorial: bool = False
+    multi_path: bool = False
+    kind: str = "kfold"
 
     @property
     def n_splits(self) -> int:
@@ -133,23 +141,35 @@ class AccelerationReport:
     n_templates: int = 0
     n_evaluations: int = 0
     n_prior_fits: int = 0
+    n_prior_updates: int = 0
     n_native_solves: int = 0
     n_updates: int = 0
+    n_warm_starts: int = 0
     fallback_reason: str | None = None
     compile_s: float = 0.0
     instantiate_s: float = 0.0
+    moments_s: float = 0.0
     solve_s: float = 0.0
     eval_s: float = 0.0
     wall_s: float = 0.0
+    baseline_s: float = 0.0
+    speedup: float = float("nan")
 
     def __str__(self) -> str:
         lines = [
-            f"Backend: {self.backend} / Clarabel",
+            f"Backend: {self.backend}",
             f"DPP: {self.dpp}",
-            f"Templates: {self.n_templates}",
             f"Evaluations: {self.n_evaluations}",
             f"Moment fits: {self.n_prior_fits}",
+            f"Moment updates: {self.n_prior_updates}",
             f"Native solves: {self.n_native_solves}",
+            f"Warm starts: {self.n_warm_starts}",
+            f"moments {self.moments_s:.4f}s  solve {self.solve_s:.4f}s  "
+            f"eval {self.eval_s:.4f}s  wall {self.wall_s:.4f}s",
             f"Fallback: {self.fallback_reason or 'none'}",
         ]
+        if self.baseline_s > 0:
+            lines.append(
+                f"Baseline {self.baseline_s:.4f}s  speedup {self.speedup:.2f}×"
+            )
         return "\n".join(lines)
