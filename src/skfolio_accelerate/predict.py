@@ -1,4 +1,9 @@
-"""Amortized drop-in for ``skfolio.model_selection.cross_val_predict``."""
+"""Drop-in for ``skfolio.model_selection.cross_val_predict``.
+
+Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. Every other
+estimator, option, and splitter is forwarded to skfolio so the original CVXPY
+problems and parameters are used unchanged.
+"""
 
 from __future__ import annotations
 
@@ -10,6 +15,7 @@ from typing import Any
 
 import numpy as np
 from sklearn.base import clone
+from sklearn.pipeline import Pipeline
 
 from skfolio import RiskMeasure
 from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predict
@@ -93,34 +99,57 @@ def _nonzero(value: Any) -> bool:
 
 def blocked_reason(estimator) -> str | None:
     """Why the compact engine cannot run this estimator, or None if it can."""
+    if isinstance(estimator, Pipeline):
+        return "pipelines use skfolio cross_val_predict"
     if not isinstance(estimator, MeanRisk):
         return f"estimator {type(estimator).__name__} is not MeanRisk"
     for attr, label in _BLOCKED_ATTRS:
         if getattr(estimator, attr, None) is not None:
-            return f"{label} is not accelerated"
+            return f"{label} is not compacted"
+    if getattr(estimator, "needs_previous_weights", False):
+        return "sequential previous_weights (costs, turnover, or fallback)"
     objective = getattr(
         estimator, "objective_function", ObjectiveFunction.MINIMIZE_RISK
     )
     if objective not in _SUPPORTED_OBJECTIVES:
-        return "objective_function is not accelerated"
+        return "objective_function is not compacted"
     risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
     if risk not in _SUPPORTED_RISKS:
-        return "risk_measure is not accelerated"
+        return "risk_measure is not compacted"
     if getattr(estimator, "min_return", None) is not None:
-        return "min_return is not accelerated"
+        return "min_return is not compacted"
     if _nonzero(getattr(estimator, "l1_coef", 0.0)):
-        return "l1_coef is not accelerated"
+        return "l1_coef is not compacted"
     if isinstance(getattr(estimator, "min_weights", 0.0), dict) or isinstance(
         getattr(estimator, "max_weights", 1.0), dict
     ):
-        return "dict weight bounds are not accelerated"
-    if _nonzero(getattr(estimator, "transaction_costs", 0.0)) or _nonzero(
-        getattr(estimator, "management_fees", 0.0)
-    ):
-        return "transaction costs / management fees are not accelerated"
+        return "dict weight bounds are not compacted"
     if not is_default_empirical(estimator):
-        return "custom prior is not accelerated"
+        return "custom prior is not compacted"
     return None
+
+
+def compact_blocked_reason(
+    estimator,
+    *,
+    y=None,
+    method: str = "predict",
+    params: dict | None = None,
+    column_indices=None,
+    entry_rebalancing_params: dict | None = None,
+) -> str | None:
+    """Why this call cannot use the compact engine (estimator or call options)."""
+    if method != "predict":
+        return "only method='predict' is compacted"
+    if y is not None:
+        return "factor/target y uses skfolio cross_val_predict"
+    if params:
+        return "fit params use skfolio cross_val_predict"
+    if column_indices is not None:
+        return "column_indices uses skfolio cross_val_predict"
+    if entry_rebalancing_params is not None:
+        return "entry_rebalancing_params uses skfolio cross_val_predict"
+    return blocked_reason(estimator)
 
 
 def _path_groups(folds: list[FoldSpec]) -> list[list[FoldSpec]]:
@@ -197,39 +226,89 @@ def _merge_batch_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _skfolio_predict(
+    estimator,
+    X,
+    y,
+    cv,
+    *,
+    n_jobs,
+    method,
+    verbose,
+    params,
+    pre_dispatch,
+    column_indices,
+    portfolio_params,
+    entry_rebalancing_params,
+):
+    return skfolio_cross_val_predict(
+        estimator,
+        X,
+        y=y,
+        cv=cv,
+        n_jobs=n_jobs,
+        method=method,
+        verbose=verbose,
+        params=params,
+        pre_dispatch=pre_dispatch,
+        column_indices=column_indices,
+        portfolio_params=portfolio_params,
+        entry_rebalancing_params=entry_rebalancing_params,
+    )
+
+
 def cross_val_predict(
     estimator,
     X,
-    cv=None,
-    *,
     y=None,
+    cv=None,
     n_jobs: int | None = None,
-    backend: str = "auto",
+    method: str = "predict",
+    verbose: int = 0,
+    params: dict | None = None,
+    pre_dispatch: str = "2*n_jobs",
+    column_indices=None,
     portfolio_params: dict | None = None,
+    entry_rebalancing_params: dict | None = None,
+    *,
+    backend: str = "auto",
     return_report: bool = False,
 ):
     """Drop-in for ``skfolio.model_selection.cross_val_predict``.
 
-    Reuses overlapping empirical moments and a compact QP/LP with warm starts
-    for ``MeanRisk`` on WalkForward, CombinatorialPurgedCV, MultipleRandomizedCV,
-    and KFold. Other estimators and unsupported MeanRisk options fall back to
-    skfolio. ``n_jobs`` is forwarded only to that fallback; the compact engine
-    is sequential (tiny QPs lose to thread overhead).
+    Call signature matches skfolio (plus ``backend`` and ``return_report``).
+    Compact OSQP/Clarabel is used only when it is equivalent to MeanRisk; every
+    other estimator, risk measure, option, and splitter uses skfolio so the
+    original CVXPY problem is solved unchanged.
     """
     _cap_native_threads()
     t_wall = time.perf_counter()
-    estimator = clone(estimator)
-    blocked = blocked_reason(estimator)
     if backend not in {"auto", "compact", "sklearn"}:
         raise ValueError(f"Unknown backend {backend!r}")
-    if backend == "sklearn" or (backend == "auto" and blocked is not None):
-        pred = skfolio_cross_val_predict(
+
+    blocked = compact_blocked_reason(
+        estimator,
+        y=y,
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+    )
+    use_sklearn = backend == "sklearn" or (backend == "auto" and blocked is not None)
+    if use_sklearn:
+        pred = _skfolio_predict(
             estimator,
             X,
-            y=y,
-            cv=cv,
+            y,
+            cv,
             n_jobs=n_jobs,
+            method=method,
+            verbose=verbose,
+            params=params,
+            pre_dispatch=pre_dispatch,
+            column_indices=column_indices,
             portfolio_params=portfolio_params,
+            entry_rebalancing_params=entry_rebalancing_params,
         )
         report = AccelerationReport(
             backend="sklearn",
@@ -238,8 +317,11 @@ def cross_val_predict(
         )
         return (pred, report) if return_report else pred
     if blocked is not None:
-        raise ValueError(f"backend={backend!r} cannot accelerate this predict: {blocked}")
+        raise ValueError(
+            f"backend={backend!r} cannot compact this predict: {blocked}"
+        )
 
+    estimator = clone(estimator)
     spec = estimator_spec(estimator)
     keep_returns = spec["risk_measure"] is RiskMeasure.CVAR
     x_arr = as_float_2d(X)

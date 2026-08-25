@@ -1,9 +1,10 @@
 # skfolio-accelerate
 
 A small add-on for [skfolio](https://github.com/skfolio/skfolio). It is a
-drop-in for `skfolio.model_selection.cross_val_predict` on overlapping
-multi-path backtests (`WalkForward`, `CombinatorialPurgedCV`,
-`MultipleRandomizedCV`).
+drop-in for `skfolio.model_selection.cross_val_predict`: same estimators,
+parameters, splitters, and return types (`MultiPeriodPortfolio` /
+`Population`). Compact solvers speed up overlapping multi-path backtests
+when they are equivalent to `MeanRisk`.
 
 ```python
 from skfolio.optimization import MeanRisk
@@ -28,7 +29,10 @@ not rebuild a CVXPY `MeanRisk` problem on every split. It:
    residuals).
 3. **Assembles paths** from NumPy views into skfolio `Portfolio` objects.
 
-Unsupported estimators fall back to skfolio `cross_val_predict`.
+This is a drop-in: the call signature matches skfolio (any estimator, any
+options, any splitter). Compact OSQP/Clarabel is used only when it is
+equivalent to `MeanRisk`; otherwise the original skfolio `fit` / CVXPY
+problem runs unchanged.
 
 ## Install
 
@@ -52,8 +56,9 @@ print(pred.summary())
 ```
 
 `return_report=True` adds an `AccelerationReport` with solve counts and phase
-times. `n_jobs` is only used when falling back to skfolio; the compact engine
-is sequential.
+times. `n_jobs` and the rest of the skfolio kwargs (`method`, `params`,
+`column_indices`, `entry_rebalancing_params`, …) are forwarded whenever the
+compact engine does not apply. The compact engine itself is sequential.
 
 ## Flagship vs skfolio `cross_val_predict(n_jobs=-1)`
 
@@ -97,12 +102,18 @@ pytest
 
 ## Coverage
 
-Accelerated:
+`cross_val_predict` accepts the same estimators, parameters, and splitters as
+skfolio: `MeanRisk` (all risk measures and objective functions), naive and
+hierarchical estimators, pipelines, `KFold`, `TimeSeriesSplit`, `WalkForward`,
+`CombinatorialPurgedCV`, `MultipleRandomizedCV`, integer `cv`, and skfolio
+kwargs such as `entry_rebalancing_params`.
 
-- Estimator: `MeanRisk` with `MINIMIZE_RISK` / `MAXIMIZE_UTILITY`
-- Risk: `VARIANCE` (OSQP), `CVAR` (Clarabel LP)
-- CV: `KFold`, `WalkForward`, `CombinatorialPurgedCV`, `MultipleRandomizedCV`
-- Default `EmpiricalPrior` (sample mean, sample covariance `ddof=1`)
+**Compact (faster, equivalent subset):** `MeanRisk` with
+`MINIMIZE_RISK` / `MAXIMIZE_UTILITY`, `VARIANCE` (OSQP) or `CVAR` (Clarabel LP),
+default `EmpiricalPrior`, and simple box/budget constraints.
 
-Falls back to skfolio: MIP, transaction costs, `MAXIMIZE_RATIO`, `min_return`,
-`l1_coef`, dict weight bounds, custom priors, and non-`MeanRisk` estimators.
+**Skfolio path (full CVXPY / estimator `fit`):** every other risk measure
+(semi-variance, CDaR, EVaR, Gini, …), `MAXIMIZE_RATIO`, MIP, costs, turnover,
+custom priors, uncertainty sets, extra constraints, factor `y`, pipelines, and
+non-`MeanRisk` estimators. Those keep skfolio’s own problem, solver, and
+parameters.
