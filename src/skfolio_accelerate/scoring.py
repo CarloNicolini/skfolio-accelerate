@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
+from scipy.stats import rankdata
 from skfolio.population import Population
 from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 
@@ -39,6 +40,38 @@ def path_sharpes(prediction) -> np.ndarray:
     if hasattr(prediction, "sharpe_ratio"):
         return np.asarray([prediction.sharpe_ratio], dtype=np.float64)
     raise TypeError(f"Unsupported prediction type {type(prediction)!r}")
+
+
+def _ranking_inputs(reference, observed) -> tuple[np.ndarray, np.ndarray]:
+    ref = np.asarray(reference, dtype=np.float64)
+    obs = np.asarray(observed, dtype=np.float64)
+    if ref.ndim != 1 or obs.ndim != 1 or ref.shape != obs.shape:
+        raise ValueError(
+            "reference and observed must be one-dimensional with equal size"
+        )
+    if ref.size == 0 or not np.all(np.isfinite(ref)) or not np.all(np.isfinite(obs)):
+        raise ValueError("ranking scores must be non-empty and finite")
+    return ref, obs
+
+
+def ranking_precision_at_k(reference, observed, *, k: int) -> float:
+    """Fraction of skfolio's top-k portfolios retained in the observed top-k."""
+    ref, obs = _ranking_inputs(reference, observed)
+    if not 1 <= k <= ref.size:
+        raise ValueError(f"k must be between 1 and {ref.size}")
+    ref_top = np.argsort(-ref, kind="stable")[:k]
+    obs_top = np.argsort(-obs, kind="stable")[:k]
+    return float(np.intersect1d(ref_top, obs_top, assume_unique=True).size / k)
+
+
+def spearman_rank_correlation(reference, observed) -> float:
+    """Spearman correlation between skfolio and observed portfolio scores."""
+    ref, obs = _ranking_inputs(reference, observed)
+    if ref.size < 2:
+        raise ValueError("at least two portfolios are required")
+    ranked_ref = rankdata(ref)
+    ranked_obs = rankdata(obs)
+    return float(np.corrcoef(ranked_ref, ranked_obs)[0, 1])
 
 
 def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:

@@ -18,8 +18,20 @@ from skfolio.model_selection import (
 from skfolio.optimization import MeanRisk
 from sklearn.model_selection import ParameterGrid
 
-from skfolio_accelerate import cross_val_predict, grid_search, path_sharpes
+from skfolio_accelerate import (
+    cross_val_predict,
+    grid_search,
+    path_sharpes,
+    ranking_precision_at_k,
+    spearman_rank_correlation,
+)
 from skfolio_accelerate.flagship import factor_returns
+
+
+def _print_ranking(label: str, reference, observed, *, k: int) -> None:
+    precision = ranking_precision_at_k(reference, observed, k=k)
+    correlation = spearman_rank_correlation(reference, observed)
+    print(f"  {label}: P@{k}={precision:.3f}; Spearman={correlation:.6f}")
 
 
 def main() -> None:
@@ -61,9 +73,12 @@ def main() -> None:
         print(f"  skfolio: {baseline_s:.3f}s")
     print(f"  accelerated: {accelerated_s:.3f}s")
     if reference is not None:
-        delta = np.max(np.abs(path_sharpes(prediction) - path_sharpes(reference)))
+        reference_scores = path_sharpes(reference)
+        observed_scores = path_sharpes(prediction)
+        delta = np.max(np.abs(observed_scores - reference_scores))
         print(f"  speedup: {baseline_s / accelerated_s:.2f}×")
         print(f"  max |path Sharpe difference|: {delta:.3e}")
+        _print_ranking("path ranking", reference_scores, observed_scores, k=20)
 
     cpcv = CombinatorialPurgedCV(
         n_folds=10,
@@ -93,11 +108,12 @@ def main() -> None:
         f"moment updates: {cpcv_report.n_prior_updates}"
     )
     if cpcv_reference is not None:
-        delta = np.max(
-            np.abs(path_sharpes(cpcv_prediction) - path_sharpes(cpcv_reference))
-        )
+        reference_scores = path_sharpes(cpcv_reference)
+        observed_scores = path_sharpes(cpcv_prediction)
+        delta = np.max(np.abs(observed_scores - reference_scores))
         print(f"  speedup: {cpcv_baseline_s / cpcv_accelerated_s:.2f}×")
         print(f"  max |path Sharpe difference|: {delta:.3e}")
+        _print_ranking("path ranking", reference_scores, observed_scores, k=3)
 
     grid_X = X.iloc[:, :100]
     walk_forward = WalkForward(train_size=2 * 252, test_size=21)
@@ -127,6 +143,8 @@ def main() -> None:
         )
         print(f"  speedup: {baseline_grid_s / accelerated_grid_s:.2f}×")
         print(f"  max |Sharpe difference|: {score_delta:.3e}")
+        observed_scores = result.cv_results_["mean_test_score"]
+        _print_ranking("candidate ranking", baseline_scores, observed_scores, k=5)
     best_l2 = float(result.best_params_["l2_coef"])
     print(f"  best l2_coef: {best_l2:.3g}")
 

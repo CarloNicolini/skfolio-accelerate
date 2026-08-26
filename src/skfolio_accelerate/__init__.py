@@ -5,7 +5,11 @@ from skfolio_accelerate.predict import (
     cross_val_predict,
     massive_cross_val_predict,
 )
-from skfolio_accelerate.scoring import path_sharpes
+from skfolio_accelerate.scoring import (
+    path_sharpes,
+    ranking_precision_at_k,
+    spearman_rank_correlation,
+)
 from skfolio_accelerate.search import GridSearchResult, grid_search
 
 __all__ = [
@@ -15,4 +19,6 @@ __all__ = [
     "grid_search",
     "massive_cross_val_predict",
     "path_sharpes",
+    "ranking_precision_at_k",
+    "spearman_rank_correlation",
 ]
