@@ -28,9 +28,23 @@ the portfolio problem:
   CVXPY graph for every fold.
 - It scores compact hyperparameter candidates from weights before constructing
   the final portfolio objects.
+- It compiles the CV plan once and builds test portfolios from `weights_`, so
+  serial calls skip joblib, `safe_split` copies, and `predict()` construction.
 
 All reuse is local to one call. The package does not keep global caches of
 returns, estimators, fitted priors, or portfolios.
+
+The EqualWeighted speedup is this last step, not a hidden solver trick. Native
+`cross_val_predict` still clones the estimator, validates a DataFrame/array
+slice, wraps `n_jobs=1` in joblib, copies the test fold, and constructs a
+`Portfolio` for every split. EqualWeighted has no optimisation, so removing
+that CV tax is the whole gain. It is a roughly constant saving per fold, not a
+multiplicative floor: a cheap estimator shows a large ratio; a CVXPY solve
+that already dominates the fold only shrinks by that same overhead. Compact
+MeanRisk already used the assembly path. Estimators that previously fell back
+to native skfolio now get the same serial assembly unless they need sequential
+`previous_weights`, a pipeline, parallel `n_jobs`, or another option that
+changes how `predict` is called.
 
 ## When it helps
 
@@ -42,7 +56,7 @@ The fast path is deliberately narrow. It applies to:
   optional L2 regularisation;
 - variance, semi-variance, semi-deviation, MAD, first lower partial moment,
   worst realization, CVaR, EVaR, maximum/average drawdown, CDaR, or EDaR;
-- default `EqualWeighted` and default-empirical `InverseVolatility`.
+- default `EqualWeighted`, `Random`, and default-empirical `InverseVolatility`.
 
 Variance uses OSQP. The scenario-based risks use Clarabel because they are
 LPs, QPs, second-order-cone problems, or exponential-cone problems. The
@@ -50,11 +64,12 @@ formulation is the same one skfolio uses: for example, the downside measures
 use its minimum acceptable return, and drawdown keeps skfolio's ordered,
 non-compounded recurrence.
 
-Everything else still works, but it runs through skfolio unchanged. That
-includes pipelines, custom priors, costs, turnover, sequential previous
-weights, target weights, factor targets, ratio and return objectives, risk
-limits, MIP/group/linear constraints, uncertainty sets, custom solver settings,
-standard deviation, ulcer index, Gini mean difference, and other optimizers.
+Other serial estimators still call native `fit` so the original problem is
+unchanged, then assemble test portfolios from `weights_`. That includes HRP,
+risk budgeting, ratio objectives, risk limits, standard deviation, and similar
+cases. Pipelines, sequential previous weights (transaction costs, turnover, or
+a previous-weight fallback), `raise_on_failure=False`, parallel `n_jobs`, and
+`entry_rebalancing_params` still run through skfolio unchanged.
 
 This boundary is intentional. Reusing mutable estimator or solver state without
 proving equivalence could silently solve a different investment problem.
@@ -68,12 +83,12 @@ prediction, report = cross_val_predict(
     cv=cv,
     return_report=True,
 )
-print(report.backend)  # "osqp", "clarabel", "closed-form", or "sklearn"
+print(report.backend)  # "osqp", "clarabel", "closed-form", "fit-assemble", or "sklearn"
 ```
 
 `"sklearn"` means native skfolio was used. The report explains why. If a
-compact numerical solve cannot finish, the package retries that call with
-native skfolio rather than returning an accelerator-only failure.
+compact numerical solve cannot finish, the package retries with native `fit`
+and the assembled path rather than returning an accelerator-only failure.
 
 ## Checking a result
 
@@ -135,13 +150,20 @@ optimizer across WalkForward, purged CPCV, and MultipleRandomizedCV:
 PYTHONPATH=src python benchmarks/benchmark_matrix.py --quick --repeats 3
 ```
 
-On the benchmark VM (Python 3.12, skfolio 1.0.0), the compact cases were
-usually 5–30× faster in the small suite; native fallbacks stayed near 1×.
-One EVaR randomized case could not complete in Clarabel and automatically fell
-back to skfolio. Peak RSS was typically similar to native because importing
-Python and skfolio dominates these small processes.
+On the benchmark VM (Python 3.12, skfolio 1.0.0), compact MeanRisk was
+usually 5–30× faster in the small suite. EqualWeighted, Random, and
+InverseVolatility were 4.5–13.2× because they skip native CV machinery.
+Serial estimators that still call native `fit` (HRP, standard deviation)
+picked up the shared assembly path at 1.2–1.7×. That is the same overhead
+cut as EqualWeighted, not a 5–13× floor: the optimiser still dominates.
+Pipelines and sequential previous weights stay on native skfolio (~1×).
+One EVaR randomized case could not complete in Clarabel and automatically
+retried with native `fit` plus assembly. Peak RSS was typically similar to
+native because importing Python and skfolio dominates these small processes.
 
 ![Quick benchmark speedup ranges](docs/figures/quick-benchmark-speedups.svg)
+
+![EqualWeighted native CV overhead](docs/figures/cv-overhead-breakdown.svg)
 
 The more useful large test contains 5,040 daily returns. Native skfolio used
 `n_jobs=1`; WalkForward made 228 solves and MRC made 480:

@@ -17,6 +17,7 @@ from skfolio.optimization import (
     InverseVolatility,
     MeanRisk,
     ObjectiveFunction,
+    Random,
     RiskBudgeting,
 )
 from skfolio.prior import EmpiricalPrior
@@ -88,8 +89,12 @@ def test_estimators_and_mean_risk_options_match_skfolio(estimator):
     ref = skfolio_cv_predict(estimator, X, cv=cv)
     pred, report = cross_val_predict(estimator, X, cv=cv, return_report=True)
     _assert_same_paths(pred, ref)
-    if blocked_reason(estimator) is not None:
+    if blocked_reason(estimator) is None:
+        assert report.backend in {"osqp", "clarabel", "closed-form"}
+    elif getattr(estimator, "needs_previous_weights", False):
         assert report.backend == "sklearn"
+    else:
+        assert report.backend == "fit-assemble"
 
 
 def test_default_mean_risk_stays_compact():
@@ -184,5 +189,84 @@ def test_directly_constructible_public_estimators_match_native(estimator_type):
         rtol=1e-8,
         atol=1e-10,
     )
-    # Supplying y deliberately keeps closed-form estimators on native skfolio.
+    constructed = estimator_type()
+    if type(constructed) in {EqualWeighted, InverseVolatility, Random}:
+        assert report.backend == "closed-form"
+    else:
+        assert report.backend in {"fit-assemble", "sklearn"}
+
+
+def test_random_uses_closed_form():
+    X = synthetic_returns(90, 5, seed=30)
+    cv = WalkForward(train_size=40, test_size=10)
+    np.random.seed(31)
+    reference = skfolio_cv_predict(Random(), X, cv=cv, n_jobs=1)
+    np.random.seed(31)
+    pred, report = cross_val_predict(Random(), X, cv=cv, n_jobs=1, return_report=True)
+    np.testing.assert_allclose(
+        path_sharpes(pred), path_sharpes(reference), rtol=0, atol=0
+    )
+    assert report.backend == "closed-form"
+
+
+def test_random_closed_form_skips_fit(monkeypatch):
+    X = synthetic_returns(60, 4, seed=32)
+    cv = WalkForward(train_size=30, test_size=10)
+    calls = {"n": 0}
+    original = Random.fit
+
+    def counting_fit(self, X, y=None, **fit_params):
+        calls["n"] += 1
+        return original(self, X, y, **fit_params)
+
+    monkeypatch.setattr(Random, "fit", counting_fit)
+    np.random.seed(33)
+    pred, report = cross_val_predict(Random(), X, cv=cv, return_report=True)
+    assert report.backend == "closed-form"
+    assert calls["n"] == 0
+    assert len(pred) == cv.get_n_splits(X)
+
+
+def test_fallback_estimators_assemble_from_native_fit():
+    X = synthetic_returns(90, 5, seed=34)
+    cv = WalkForward(train_size=40, test_size=10)
+    for estimator in (
+        HierarchicalRiskParity(),
+        RiskBudgeting(),
+        MeanRisk(min_return=1e-5),
+        MeanRisk(management_fees=1e-4),
+        MeanRisk(risk_measure=RiskMeasure.STANDARD_DEVIATION),
+    ):
+        ref = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
+        pred, report = cross_val_predict(
+            estimator, X, cv=cv, n_jobs=1, return_report=True
+        )
+        _assert_same_paths(pred, ref)
+        assert report.backend == "fit-assemble"
+        assert report.n_solves == cv.get_n_splits(X)
+
+
+def test_parallel_n_jobs_keeps_native_fallback():
+    X = synthetic_returns(72, 4, seed=35)
+    cv = WalkForward(train_size=36, test_size=12)
+    ref = skfolio_cv_predict(HierarchicalRiskParity(), X, cv=cv, n_jobs=1)
+    pred, report = cross_val_predict(
+        HierarchicalRiskParity(),
+        X,
+        cv=cv,
+        n_jobs=-1,
+        return_report=True,
+    )
+    _assert_same_paths(pred, ref)
     assert report.backend == "sklearn"
+
+
+def test_transaction_costs_stay_on_sequential_native_path():
+    X = synthetic_returns(72, 4, seed=36)
+    cv = WalkForward(train_size=36, test_size=12)
+    estimator = MeanRisk(transaction_costs=1e-4)
+    ref = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
+    pred, report = cross_val_predict(estimator, X, cv=cv, n_jobs=1, return_report=True)
+    _assert_same_paths(pred, ref)
+    assert report.backend == "sklearn"
+    assert "previous_weights" in (report.fallback_reason or "")
