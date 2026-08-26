@@ -57,7 +57,7 @@ def test_estimators_and_mean_risk_options_match_skfolio(estimator):
     ref = skfolio_cv_predict(estimator, X, cv=cv)
     pred, report = cross_val_predict(estimator, X, cv=cv, return_report=True)
     _assert_same_paths(pred, ref)
-    if type(estimator).__name__ != "MeanRisk" or blocked_reason(estimator) is not None:
+    if blocked_reason(estimator) is not None:
         assert report.backend == "sklearn"
 
 
@@ -86,7 +86,7 @@ def test_cpcv_other_estimator():
     ref = path_sharpes(skfolio_cv_predict(EqualWeighted(), X, cv=cv))
     pred, report = cross_val_predict(EqualWeighted(), X, cv=cv, return_report=True)
     np.testing.assert_allclose(path_sharpes(pred), ref, rtol=1e-8, atol=1e-10)
-    assert report.backend == "sklearn"
+    assert report.backend == "closed-form"
 
 
 def test_skfolio_kwargs_are_accepted():
@@ -112,7 +112,7 @@ def test_mrc_and_pipeline_use_skfolio_path():
     ref = path_sharpes(skfolio_cv_predict(InverseVolatility(), X, cv=cv))
     pred, report = cross_val_predict(InverseVolatility(), X, cv=cv, return_report=True)
     np.testing.assert_allclose(path_sharpes(pred), ref, rtol=1e-8, atol=1e-10)
-    assert report.backend == "sklearn"
+    assert report.backend == "closed-form"
 
     X2 = synthetic_returns(60, 4, seed=17)
     pipe = Pipeline([("opt", MeanRisk())])

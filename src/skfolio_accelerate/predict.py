@@ -476,19 +476,44 @@ def cross_val_predict(
         if cv_plan.kind == "mrc" and spec["risk_measure"] is RiskMeasure.VARIANCE
         else None
     )
-    merged = _merge_batch_results(
-        [
-            _run_fold_batch(
-                x_arr,
-                batch,
-                spec,
-                keep_returns=keep_returns,
-                fold_blocks=fold_blocks,
-                engines=shared_engines,
-            )
-            for batch in batches
-        ]
-    )
+    try:
+        merged = _merge_batch_results(
+            [
+                _run_fold_batch(
+                    x_arr,
+                    batch,
+                    spec,
+                    keep_returns=keep_returns,
+                    fold_blocks=fold_blocks,
+                    engines=shared_engines,
+                )
+                for batch in batches
+            ]
+        )
+    except (RuntimeError, ValueError) as error:
+        pred = _skfolio_predict(
+            estimator,
+            X,
+            y,
+            cv,
+            n_jobs=n_jobs,
+            method=method,
+            verbose=verbose,
+            params=params,
+            pre_dispatch=pre_dispatch,
+            column_indices=column_indices,
+            portfolio_params=portfolio_params,
+            entry_rebalancing_params=entry_rebalancing_params,
+        )
+        report = AccelerationReport(
+            backend="sklearn",
+            fallback_reason=(
+                f"compact {spec['risk_measure'].name} solve failed: "
+                f"{type(error).__name__}: {error}"
+            ),
+            wall_s=time.perf_counter() - t_wall,
+        )
+        return (pred, report) if return_report else pred
 
     t_eval = time.perf_counter()
     pred = assemble_prediction(
