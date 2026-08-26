@@ -1,0 +1,65 @@
+name: Publish release
+
+on:
+  release:
+    types:
+      - published
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Verify and build release
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Verify release tag
+        run: |
+          PACKAGE_VERSION="$(python -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["version"])')"
+          test "${GITHUB_REF_NAME}" = "v${PACKAGE_VERSION}"
+      - name: Install release tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]" build ruff twine
+      - name: Verify source
+        run: |
+          ruff check src tests benchmarks examples
+          ruff format --check src tests benchmarks examples
+          pytest
+      - name: Build distributions
+        run: |
+          python -m build
+          python -m twine check dist/*
+      - name: Store distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-${{ github.event.release.tag_name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 30
+
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/skfolio-accelerate
+    permissions:
+      id-token: write
+    steps:
+      - name: Download distributions
+        uses: actions/download-artifact@v8
+        with:
+          name: python-package-${{ github.event.release.tag_name }}
+          path: dist/
+      - name: Publish distributions
+        uses: pypa/gh-action-pypi-publish@release/v1

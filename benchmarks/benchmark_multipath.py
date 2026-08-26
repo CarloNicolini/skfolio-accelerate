@@ -13,12 +13,12 @@ import os
 import time
 
 import numpy as np
-from sklearn.base import clone
-
 from skfolio import RiskMeasure
-from skfolio.model_selection import WalkForward, cross_val_predict as skfolio_cv_predict
+from skfolio.model_selection import WalkForward
+from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
 from skfolio.optimization import MeanRisk
 from skfolio.prior import EmpiricalPrior
+from sklearn.base import clone
 
 from skfolio_accelerate import cross_val_predict, path_sharpes
 from skfolio_accelerate.flagship import FLAGSHIP_MRC, SMOKE_CPCV, make_cpcv, make_mrc
@@ -45,10 +45,23 @@ def _profile_one_fit(estimator, X_window, n_rep: int = 8) -> dict[str, float]:
     for _ in range(n_rep):
         EmpiricalPrior().fit(X_window)
     prior_s = (time.perf_counter() - t0) / n_rep
-    return {"prior_s": prior_s, "fit_s": fit_s, "solve_proxy_s": max(fit_s - prior_s, 0.0)}
+    return {
+        "prior_s": prior_s,
+        "fit_s": fit_s,
+        "solve_proxy_s": max(fit_s - prior_s, 0.0),
+    }
 
 
-def _print_report(title: str, baseline_s: float, report, pred, ref=None, *, baseline_fit_s: float = 0.0, baseline_prior_s: float = 0.0) -> None:
+def _print_report(
+    title: str,
+    baseline_s: float,
+    report,
+    pred,
+    ref=None,
+    *,
+    baseline_fit_s: float = 0.0,
+    baseline_prior_s: float = 0.0,
+) -> None:
     speedup = baseline_s / report.wall_s if report.wall_s else float("nan")
     report.baseline_s = baseline_s
     report.speedup = speedup
@@ -63,19 +76,24 @@ def _print_report(title: str, baseline_s: float, report, pred, ref=None, *, base
     else:
         accelerated_frac = float("nan")
     print(title)
-    print(f"  baseline {baseline_s:.4f}s  compact {report.wall_s:.4f}s  speedup {speedup:.2f}×")
     print(
-        f"  compact phases  moments {report.moments_s:.4f}s  solve {report.solve_s:.4f}s  "
+        f"  baseline {baseline_s:.4f}s  compact {report.wall_s:.4f}s  "
+        f"speedup {speedup:.2f}×"
+    )
+    print(
+        f"  compact phases  moments {report.moments_s:.4f}s  "
+        f"solve {report.solve_s:.4f}s  "
         f"eval {report.eval_s:.4f}s  ({100 * compact_frac:.1f}% of compact wall)"
     )
     print(
         f"  n_solves {report.n_solves}  n_prior_fits {report.n_prior_fits}  "
-        f"n_prior_updates {report.n_prior_updates}  n_warm_starts {report.n_warm_starts}"
+        f"n_prior_updates {report.n_prior_updates}  "
+        f"n_warm_starts {report.n_warm_starts}"
     )
     if baseline_fit_s > 0:
         print(
-            f"  baseline MeanRisk.fit sample {baseline_fit_s*1000:.1f}ms  "
-            f"(prior {baseline_prior_s*1000:.1f}ms)  "
+            f"  baseline MeanRisk.fit sample {baseline_fit_s * 1000:.1f}ms  "
+            f"(prior {baseline_prior_s * 1000:.1f}ms)  "
             f"accelerated kernels ≈ {100 * accelerated_frac:.0f}% of each fit"
         )
     if ref is not None:
@@ -116,8 +134,9 @@ def main() -> None:
     window = X.iloc[: spec["train_size"], : spec["asset_subset_size"]]
     sample = _profile_one_fit(estimator, window)
     print(
-        f"single MeanRisk.fit {sample['fit_s']*1000:.1f}ms  "
-        f"(prior {sample['prior_s']*1000:.1f}ms  rest {sample['solve_proxy_s']*1000:.1f}ms)"
+        f"single MeanRisk.fit {sample['fit_s'] * 1000:.1f}ms  "
+        f"(prior {sample['prior_s'] * 1000:.1f}ms  "
+        f"rest {sample['solve_proxy_s'] * 1000:.1f}ms)"
     )
 
     baseline_s = 0.0

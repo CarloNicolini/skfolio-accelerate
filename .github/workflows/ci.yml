@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint and format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install quality tools
+        run: python -m pip install ruff
+      - name: Lint
+        run: ruff check src tests benchmarks examples
+      - name: Check formatting
+        run: ruff format --check src tests benchmarks examples
+
+  tests:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.10"
+          - "3.11"
+          - "3.12"
+          - "3.13"
+          - "3.14"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Run tests
+        run: pytest --cov=skfolio_accelerate --cov-report=term-missing --cov-report=xml
+      - name: Store coverage report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Build and inspect package
+    needs:
+      - quality
+      - tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Test wheel installation
+        run: |
+          python -m venv /tmp/package-smoke
+          /tmp/package-smoke/bin/python -m pip install dist/*.whl
+          /tmp/package-smoke/bin/python -c "import skfolio_accelerate"
+      - name: Store distributions
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-package-${{ github.sha }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14

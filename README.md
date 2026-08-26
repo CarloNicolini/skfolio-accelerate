@@ -176,3 +176,16 @@ source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
 ```
+
+## Automation and releases
+
+Every pull request and push to `main` runs Ruff, the complete test suite on
+Python 3.10 through 3.14, a coverage report, and a wheel/sdist build with an
+installation smoke test. Dependabot checks Python and GitHub Actions
+dependencies weekly.
+
+Publishing a non-prerelease GitHub Release automatically verifies the source,
+checks that a tag such as `v0.1.0` matches the version in `pyproject.toml`,
+builds the distributions, and publishes them to PyPI. PyPI Trusted Publishing
+must be configured once for this repository, the `release.yml` workflow, and
+the `pypi` GitHub environment; no API token is stored in GitHub.
