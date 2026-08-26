@@ -7,6 +7,7 @@ problems and parameters are used unchanged.
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from collections import defaultdict
@@ -437,6 +438,9 @@ def cross_val_predict(
 
     estimator = clone(estimator)
     x_arr = as_float_2d(X)
+    # A compact numerical failure must retry the exact original split plan.
+    # Some splitters accept mutable RandomState objects and advance them in split().
+    fallback_cv = copy.deepcopy(cv)
     cv_plan = compile_cv_plan(cv, X, y)
     fold_blocks = None
     if cv_plan.kind == "cpcv":
@@ -501,7 +505,7 @@ def cross_val_predict(
             estimator,
             X,
             y,
-            cv,
+            fallback_cv,
             n_jobs=n_jobs,
             method=method,
             verbose=verbose,

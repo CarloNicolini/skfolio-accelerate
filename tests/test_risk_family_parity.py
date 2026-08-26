@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+
 import numpy as np
 import pytest
 from skfolio import RiskMeasure
@@ -208,3 +210,45 @@ def test_compact_solver_failure_retries_native(monkeypatch):
     )
     assert report.backend == "sklearn"
     assert "deliberate compact failure" in report.fallback_reason
+
+
+def test_compact_failure_preserves_mutable_randomized_cv_plan(monkeypatch):
+    import skfolio_accelerate.compact as compact
+
+    class FailingEngine:
+        n_warm_starts = 0
+
+        def solve(self, moments, *, warm=True):
+            raise RuntimeError("deliberate randomized failure")
+
+    monkeypatch.setattr(
+        compact, "make_compact_engine", lambda *args, **kwargs: FailingEngine()
+    )
+    X = synthetic_returns(96, 6, seed=94)
+    cv = MultipleRandomizedCV(
+        walk_forward=WalkForward(train_size=36, test_size=12),
+        n_subsamples=3,
+        asset_subset_size=4,
+        window_size=84,
+        random_state=np.random.RandomState(95),
+    )
+    reference = skfolio_cv_predict(
+        MeanRisk(risk_measure=RiskMeasure.CVAR),
+        X,
+        cv=copy.deepcopy(cv),
+        n_jobs=1,
+    )
+    observed, report = cross_val_predict(
+        MeanRisk(risk_measure=RiskMeasure.CVAR),
+        X,
+        cv=cv,
+        n_jobs=1,
+        return_report=True,
+    )
+    np.testing.assert_allclose(
+        path_sharpes(observed),
+        path_sharpes(reference),
+        rtol=0,
+        atol=0,
+    )
+    assert report.backend == "sklearn"
