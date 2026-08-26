@@ -15,81 +15,49 @@ prediction = cross_val_predict(MeanRisk(), X, cv=cv)
 
 The result is still a skfolio `MultiPeriodPortfolio` or `Population`.
 
-## What is being saved
+## What it does
 
-Long backtests fit almost the same model many times. A monthly walk-forward
-over twenty years contains hundreds of overlapping training windows, while a
-randomized multi-path backtest can contain tens of thousands.
+Backtests repeatedly fit nearly identical portfolios. This package recognises
+the small set of cases where that repetition can be removed without changing
+the portfolio problem:
 
-For compact-compatible MeanRisk and simple closed-form cases, this package
-avoids doing all of the setup again:
+- It updates empirical moments as a training window moves.
+- It assembles CPCV training moments from fold blocks, including purge and
+  embargo exclusions.
+- It reuses the shape of an equivalent solver problem instead of rebuilding a
+  CVXPY graph for every fold.
+- It scores compact hyperparameter candidates from weights before constructing
+  the final portfolio objects.
 
-- Empirical means and covariances are updated as a window moves instead of
-  being recomputed from scratch. KFold reuses the observations shared by
-  consecutive splits. CPCV builds each fold's sufficient statistics once,
-  then adds and subtracts blocks; purged and embargoed rows are corrected
-  exactly.
-- Variance is sent directly to OSQP. Scenario LPs, QPs, second-order cones, and
-  exponential cones are sent directly to Clarabel. Their fixed-dimension
-  workspaces are updated as the window changes.
-- Randomized paths with the same number of assets share one solver workspace.
-- Hyperparameter candidates share the CV splits and empirical moments.
-- Contiguous test periods are passed to skfolio as NumPy views, avoiding a
-  copy for every portfolio segment.
+All reuse is local to one call. The package does not keep global caches of
+returns, estimators, fitted priors, or portfolios.
 
-Small, immutable pieces of solver structure are cached with `lru_cache`.
-Returns, covariance matrices, fitted estimators, and CV plans are deliberately
-not kept in a global cache: they are large, depend on mutable inputs, and can
-silently become stale. Those values are reused only inside one call.
+## When it helps
 
-## Compatibility
+The fast path is deliberately narrow. It applies to:
 
-The function accepts the same arguments as skfolio, including `y`, `method`,
-`params`, `column_indices`, and `entry_rebalancing_params`. It works with
-KFold, TimeSeriesSplit, WalkForward, CombinatorialPurgedCV,
-MultipleRandomizedCV, integer `cv`, pipelines, and skfolio optimization
-estimators.
+- `MeanRisk` with the default empirical prior;
+- minimize-risk or maximize-utility objectives;
+- a fixed equality budget, ordinary scalar or per-asset weight bounds, and
+  optional L2 regularisation;
+- variance, semi-variance, semi-deviation, MAD, first lower partial moment,
+  worst realization, CVaR, EVaR, maximum/average drawdown, CDaR, or EDaR;
+- default `EqualWeighted` and default-empirical `InverseVolatility`.
 
-The compact solver is used only for `MeanRisk` with minimize-risk or
-maximize-utility objectives, the default empirical prior, and ordinary box
-plus equality-budget constraints. The supported risks and exact formulations
-are:
+Variance uses OSQP. The scenario-based risks use Clarabel because they are
+LPs, QPs, second-order-cone problems, or exponential-cone problems. The
+formulation is the same one skfolio uses: for example, the downside measures
+use its minimum acceptable return, and drawdown keeps skfolio's ordered,
+non-compounded recurrence.
 
-| Risk | Compact formulation | Solver |
-|---|---|---|
-| Variance | sample-covariance QP | OSQP |
-| Semi-variance | `sum(u²)/(T-1)`, `u >= -(R-MAR)w`, `u >= 0` | Clarabel QP |
-| Semi-deviation | same downside variables with `norm(u)/sqrt(T-1)` | Clarabel SOCP |
-| MAD | `2 sum(u)/T`, `u >= -(R-MAR)w`, `u >= 0` | Clarabel LP/QP |
-| First lower partial moment | `sum(u)/T` with the same downside epigraph | Clarabel LP/QP |
-| Worst realization | `z >= -Rw` | Clarabel LP/QP |
-| CVaR | `alpha + sum(u)/(T(1-beta))` | Clarabel LP/QP |
-| Max/average drawdown and CDaR | ordered linear drawdown recurrence | Clarabel LP/QP |
-| EVaR and EDaR | skfolio's perspective exponential-cone model | Clarabel |
+Everything else still works, but it runs through skfolio unchanged. That
+includes pipelines, custom priors, costs, turnover, sequential previous
+weights, target weights, factor targets, ratio and return objectives, risk
+limits, MIP/group/linear constraints, uncertainty sets, custom solver settings,
+standard deviation, ulcer index, Gini mean difference, and other optimizers.
 
-`MAR` has skfolio's exact meaning: when no minimum acceptable return is given,
-it is the fitted empirical mean, so the scenario matrix is `(R - mean(R))`.
-Drawdown optimization uses skfolio's ordered, non-compounded recurrence.
-Scenario rows, empirical moments, sparse topology, and solver iterates are
-reused only inside the current call and only while dimensions are equivalent.
-
-Default `EqualWeighted` and default-empirical `InverseVolatility` also use
-closed-form paths. Inverse volatility shares the same per-call covariance
-updates.
-
-Everything else is passed to skfolio unchanged. This includes standard
-deviation, ulcer index, Gini mean difference, ratio/return objectives,
-mixed-integer/group/linear constraints, risk limits, transaction costs,
-management fees, turnover, previous or target weights, custom priors,
-uncertainty sets, factor data, custom solver parameters/scaling, pipelines,
-and other optimizers. A compact numerical failure is also retried through
-native skfolio and reported as fallback. Native errors are not relabeled as
-accelerator errors.
-
-This is an intentional correctness boundary, not a general acceleration claim.
-For an arbitrary skfolio estimator, safely caching a fitted prior or solver
-would require knowing which inputs, constraints, and state it owns. Reusing one
-without that knowledge can silently solve a different portfolio problem.
+This boundary is intentional. Reusing mutable estimator or solver state without
+proving equivalence could silently solve a different investment problem.
 
 Pass `return_report=True` if you want to see which path was selected:
 
@@ -103,11 +71,14 @@ prediction, report = cross_val_predict(
 print(report.backend)  # "osqp", "clarabel", "closed-form", or "sklearn"
 ```
 
-## Checking portfolio rankings
+`"sklearn"` means native skfolio was used. The report explains why. If a
+compact numerical solve cannot finish, the package retries that call with
+native skfolio rather than returning an accelerator-only failure.
 
-Numerical closeness does not guarantee that portfolio selection is unchanged.
-The package therefore exposes two small comparison helpers. Treat skfolio's
-native scores as the reference:
+## Checking a result
+
+Use native skfolio as the reference when validating a new workload. Numerical
+closeness does not automatically mean that a ranking is unchanged:
 
 ```python
 from skfolio_accelerate import (
@@ -127,17 +98,15 @@ tie_aware = ranking_precision_at_k(
 )
 ```
 
-Precision@k measures how much of skfolio's top-k set is retained. With a score
-tolerance, candidates tied with skfolio's kth score are accepted instead of
-being penalized for an arbitrary numerical ordering. Spearman correlation
-compares the complete ordering and can use the same tolerance to form tie
-groups. Spearman is `nan` when either set is constant because no ranking exists.
+Precision@k checks whether skfolio's best candidates remain in the best set.
+The optional tolerance treats near-equal scores as ties. Spearman compares the
+full ordering. It is `nan` when every score is the same.
 
 ## Parameter search
 
-`grid_search` is intended for large grids that stay inside the compact
-MeanRisk subset. It scores each candidate by the mean out-of-sample Sharpe
-ratio across paths.
+`grid_search` is for a large grid that remains inside the fast MeanRisk subset.
+It scores candidates by mean out-of-sample Sharpe ratio and only constructs the
+winning prediction. Use skfolio or sklearn search for general estimators.
 
 ```python
 import numpy as np
@@ -155,46 +124,25 @@ print(result.best_score_)
 prediction = result.best_prediction_
 ```
 
-Use skfolio's `OnlineGridSearch`, `OnlineRandomizedSearch`, or sklearn's
-`GridSearchCV` for general estimator searches. The specialized function above
-is faster because all candidates see one compiled CV plan and one stream of
-moment updates.
-
 ## Benchmarks
 
-`benchmark_matrix.py` runs each case in an isolated process. A sampling thread
-records peak RSS for the process and all worker descendants, so parallel native
-runs are included. It reports median wall time, median absolute deviation,
-peak RSS, solve/moment/warm-start counts, maximum Sharpe difference, tie-aware
-precision@k and Spearman correlation, backend, and fallback reason.
-
-The quick matrix covers every `RiskMeasure`, directly constructible public
-optimizers, and WalkForward, purged CPCV, and MultipleRandomizedCV:
+Measured results depend on data shape and the number of folds. The quick suite
+uses synthetic data, repeats each run three times, and reports the median wall
+time and process-tree peak RSS. It covers every risk measure and public
+optimizer across WalkForward, purged CPCV, and MultipleRandomizedCV:
 
 ```bash
 PYTHONPATH=src python benchmarks/benchmark_matrix.py --quick --repeats 3
 ```
 
-On this cloud VM (Python 3.12, skfolio 1.0.0), the repeated quick results were:
+On the benchmark VM (Python 3.12, skfolio 1.0.0), the compact cases were
+usually 5–30× faster in the small suite; native fallbacks stayed near 1×.
+One EVaR randomized case could not complete in Clarabel and automatically fell
+back to skfolio. Peak RSS was typically similar to native because importing
+Python and skfolio dominates these small processes.
 
-- Structured variance: 19.9–29.6× faster.
-- Structured semi-variance/deviation: 5.8–8.9× faster.
-- MAD, first lower partial moment, worst realization, and drawdown LPs:
-  7.0–12.7× faster.
-- CVaR: 8.6–15.2× faster.
-- EVaR: 5.5–7.8× when the compact cone solved; one MRC case retried native
-  after Clarabel reported insufficient progress.
-- EqualWeighted and InverseVolatility: 4.5–14.2× faster.
-- Generic fallback: approximately 1×, as expected.
-
-All solvable cases retained tie-aware precision@k of 1.0. Native EDaR failed
-on two of the three quick synthetic cases; those are reported as native solver
-limitations. Structured peak-RSS ratios were about 0.97–0.98, while fallback
-was about 1.0. Absolute RSS is dominated by the Python/skfolio import baseline,
-so the ratio should not be interpreted as solver workspace size alone.
-
-For representative 5,040-day workloads, native skfolio used `n_jobs=1`.
-WalkForward had 228 solves and MRC had 480 solves:
+The more useful large test contains 5,040 daily returns. Native skfolio used
+`n_jobs=1`; WalkForward made 228 solves and MRC made 480:
 
 | Risk | WalkForward speedup | MRC speedup | max path Sharpe difference |
 |---|---:|---:|---:|
@@ -204,11 +152,9 @@ WalkForward had 228 solves and MRC had 480 solves:
 | CVaR | 3.3× | 4.2× | `7.4e-6` |
 | Max drawdown | 2.1× | 2.6× | `1.6e-7` |
 
-Peak-RSS ratios for these runs were 0.96–0.99. Small six-solve CPCV cases gave
-only 0.98–1.12× for the scenario engines because fixed setup dominates; they
-are not included in a headline average. Semi-variance uses direct Clarabel:
-OSQP was mathematically valid but measured at only 0.69× on the 20-asset
-WalkForward workload.
+Small six-solve CPCV cases are often near break-even for scenario risks because
+fixed setup dominates. They are not included in the table above. For this
+reason the project does not claim one universal speedup number.
 
 Reproduce a focused 20-year run with:
 
@@ -221,9 +167,10 @@ PYTHONPATH=src python benchmarks/benchmark_matrix.py --repeats 3 \
   --only 'MeanRisk[MAX_DRAWDOWN]'
 ```
 
-Use `--native-n-jobs=-1` as a separate parallel timing comparison. The
-correctness baseline remains native `n_jobs=1`. Structured and fallback rows
-are deliberately reported separately.
+Use `--native-n-jobs=-1` separately when comparing parallel throughput. Native
+`n_jobs=1` is the correctness baseline. The CSV output keeps compact and
+fallback rows separate and includes timing spread, peak RSS, numerical
+difference, rankings, solver counts, and fallback reasons.
 
 ## Installation and tests
 
