@@ -120,7 +120,6 @@ class _BlockStats:
     n_obs: int
     sum_vec: NDArray[np.float64]
     gram: NDArray[np.float64]
-    rows: NDArray[np.intp]
 
 
 @dataclass
@@ -128,6 +127,13 @@ class _SlideState:
     start: int
     stop: int
     n_obs: int
+    sum_vec: NDArray[np.float64]
+    gram: NDArray[np.float64]
+
+
+@dataclass
+class _IndexState:
+    rows: NDArray[np.intp]
     sum_vec: NDArray[np.float64]
     gram: NDArray[np.float64]
 
@@ -153,6 +159,7 @@ class OverlapMomentCache:
         self.n_fits = 0
         self.n_updates = 0
         self._slide: dict[int, _SlideState] = {}
+        self._indexed: dict[int, _IndexState] = {}
         self._blocks: list[_BlockStats] | None = None
         if fold_blocks:
             self._blocks = [self._stats_from_rows(rows) for rows in fold_blocks]
@@ -164,7 +171,6 @@ class OverlapMomentCache:
             n_obs=int(rows.size),
             sum_vec=window.sum(axis=0),
             gram=window.T @ window,
-            rows=np.asarray(rows, dtype=np.intp),
         )
 
     def get(self, fold: FoldSpec, *, path_key: int = 0) -> FoldMoments:
@@ -172,12 +178,8 @@ class OverlapMomentCache:
             return self._from_blocks(fold)
 
         bounds = _contiguous_bounds(fold.train_idx)
-        if bounds is None:
-            window = self.X[fold.train_idx]
-            self.n_fits += 1
-            return empirical_from_window(
-                window, keep_returns=self.keep_returns, ddof=self.ddof
-            )
+        if bounds is None or path_key in self._indexed:
+            return self._from_index_rows(fold.train_idx, path_key)
 
         start, stop = bounds
         prev = self._slide.get(path_key)
@@ -239,22 +241,87 @@ class OverlapMomentCache:
             ddof=self.ddof,
         )
 
+    def _from_index_rows(
+        self,
+        rows: NDArray[np.intp],
+        path_key: int,
+    ) -> FoldMoments:
+        previous = self._indexed.get(path_key)
+        if previous is None:
+            slide = self._slide.get(path_key)
+            if slide is not None:
+                previous = _IndexState(
+                    rows=np.arange(slide.start, slide.stop, dtype=np.intp),
+                    sum_vec=slide.sum_vec,
+                    gram=slide.gram,
+                )
+        if previous is not None:
+            removed = np.setdiff1d(previous.rows, rows, assume_unique=True)
+            added = np.setdiff1d(rows, previous.rows, assume_unique=True)
+            if removed.size + added.size < rows.size:
+                sum_vec = previous.sum_vec
+                gram = previous.gram
+                if removed.size:
+                    values = self.X[removed]
+                    sum_vec = sum_vec - values.sum(axis=0)
+                    gram = gram - values.T @ values
+                if added.size:
+                    values = self.X[added]
+                    sum_vec = sum_vec + values.sum(axis=0)
+                    gram = gram + values.T @ values
+                state = _IndexState(
+                    rows=rows,
+                    sum_vec=sum_vec,
+                    gram=gram,
+                )
+                self._indexed[path_key] = state
+                self.n_updates += 1
+                returns = self.X[rows] if self.keep_returns else None
+                return empirical_from_stats(
+                    int(rows.size),
+                    sum_vec,
+                    gram,
+                    returns=returns,
+                    keep_returns=self.keep_returns,
+                    ddof=self.ddof,
+                )
+
+        window = self.X[rows]
+        state = _IndexState(
+            rows=rows,
+            sum_vec=window.sum(axis=0),
+            gram=window.T @ window,
+        )
+        self._indexed[path_key] = state
+        self.n_fits += 1
+        return empirical_from_stats(
+            int(rows.size),
+            state.sum_vec,
+            state.gram,
+            returns=window if self.keep_returns else None,
+            keep_returns=self.keep_returns,
+            ddof=self.ddof,
+        )
+
     def _from_blocks(self, fold: FoldSpec) -> FoldMoments:
         assert self._blocks is not None
         n_obs = 0
         sum_vec = None
         gram = None
-        row_parts: list[NDArray[np.intp]] = []
         for block_id in fold.train_block_ids:
             block = self._blocks[block_id]
             n_obs += block.n_obs
             sum_vec = block.sum_vec if sum_vec is None else sum_vec + block.sum_vec
             gram = block.gram if gram is None else gram + block.gram
-            row_parts.append(block.rows)
+        if fold.train_excluded_idx.size:
+            excluded = self.X[fold.train_excluded_idx]
+            n_obs -= int(excluded.shape[0])
+            sum_vec = sum_vec - excluded.sum(axis=0)
+            gram = gram - excluded.T @ excluded
         self.n_updates += 1
         returns = None
         if self.keep_returns:
-            returns = self.X[np.concatenate(row_parts)]
+            returns = self.X[fold.train_idx]
         return empirical_from_stats(
             n_obs,
             sum_vec,

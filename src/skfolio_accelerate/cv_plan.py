@@ -6,9 +6,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 from numpy.typing import NDArray
-from sklearn.model_selection import check_cv
-
 from skfolio.model_selection import BaseCombinatorialCV, MultipleRandomizedCV
+from sklearn.model_selection import check_cv
 
 
 @dataclass
@@ -22,6 +21,9 @@ class FoldSpec:
     path_ids: list[int] = field(default_factory=list)
     asset_idx: NDArray[np.intp] | None = None
     train_block_ids: tuple[int, ...] = ()
+    train_excluded_idx: NDArray[np.intp] = field(
+        default_factory=lambda: np.empty(0, dtype=np.intp)
+    )
 
     @property
     def path_id(self) -> int:
@@ -97,8 +99,6 @@ def _compile_cpcv(splitter, X, y=None) -> CVPlan:
     fold_of = np.empty(n_samples, dtype=np.intp)
     for block_id, rows in enumerate(blocks):
         fold_of[rows] = block_id
-    purged = int(getattr(splitter, "purged_size", 0) or 0)
-    embargo = int(getattr(splitter, "embargo_size", 0) or 0)
     folds: list[FoldSpec] = []
     for fold_id, (train, test_segments) in enumerate(splitter.split(X, y)):
         segments = [np.asarray(seg, dtype=np.intp) for seg in test_segments]
@@ -106,11 +106,13 @@ def _compile_cpcv(splitter, X, y=None) -> CVPlan:
             np.concatenate(segments) if segments else np.array([], dtype=np.intp)
         )
         train_idx = np.asarray(train, dtype=np.intp)
-        train_blocks: tuple[int, ...] = ()
-        if not (purged or embargo):
-            train_blocks = tuple(
-                int(v) for v in sorted(set(fold_of[train_idx].tolist()))
-            )
+        train_blocks = tuple(int(v) for v in np.unique(fold_of[train_idx]))
+        full_train_rows = np.concatenate([blocks[i] for i in train_blocks])
+        excluded = np.setdiff1d(
+            full_train_rows,
+            train_idx,
+            assume_unique=True,
+        ).astype(np.intp, copy=False)
         folds.append(
             FoldSpec(
                 fold_id=fold_id,
@@ -119,6 +121,7 @@ def _compile_cpcv(splitter, X, y=None) -> CVPlan:
                 test_segments=segments,
                 path_ids=[int(v) for v in path_ids[fold_id]],
                 train_block_ids=train_blocks,
+                train_excluded_idx=excluded,
             )
         )
     return CVPlan(

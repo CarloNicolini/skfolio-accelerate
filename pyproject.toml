@@ -19,12 +19,8 @@ classifiers = [
   "Topic :: Scientific/Engineering :: Mathematics",
 ]
 dependencies = [
-  "numpy>=1.23",
-  "scipy>=1.10",
-  "osqp>=0.6",
-  "clarabel>=0.9.0,<0.12",
-  "scikit-learn>=1.4",
-  "skfolio>=0.7",
+  "osqp>=1.0,<2",
+  "skfolio>=1.0,<2",
 ]
 
 [project.optional-dependencies]

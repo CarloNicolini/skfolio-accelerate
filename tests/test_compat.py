@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from sklearn.model_selection import TimeSeriesSplit
-
 from skfolio import RiskMeasure
 from skfolio.model_selection import CombinatorialPurgedCV, WalkForward
 from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
@@ -18,6 +16,7 @@ from skfolio.optimization import (
     RiskBudgeting,
 )
 from skfolio.prior import EmpiricalPrior
+from sklearn.model_selection import TimeSeriesSplit
 
 from skfolio_accelerate import cross_val_predict, path_sharpes
 from skfolio_accelerate.flagship import SMOKE_MRC, make_mrc
@@ -26,7 +25,9 @@ from tests.helpers import synthetic_returns
 
 
 def _assert_same_paths(pred, ref, *, rtol=2e-3, atol=1e-4):
-    np.testing.assert_allclose(path_sharpes(pred), path_sharpes(ref), rtol=rtol, atol=atol)
+    np.testing.assert_allclose(
+        path_sharpes(pred), path_sharpes(ref), rtol=rtol, atol=atol
+    )
 
 
 @pytest.mark.parametrize(
@@ -40,6 +41,11 @@ def _assert_same_paths(pred, ref, *, rtol=2e-3, atol=1e-4):
         MeanRisk(objective_function=ObjectiveFunction.MAXIMIZE_RATIO),
         MeanRisk(min_return=1e-5),
         MeanRisk(l1_coef=1e-3),
+        MeanRisk(max_variance=1.0),
+        MeanRisk(management_fees=1e-4),
+        MeanRisk(budget=None, min_budget=0.9, max_budget=1.1),
+        MeanRisk(risk_free_rate=1e-4),
+        MeanRisk(solver_params={"max_iter": 1_000}),
         MeanRisk(prior_estimator=EmpiricalPrior()),
         HierarchicalRiskParity(),
         RiskBudgeting(),

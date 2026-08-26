@@ -14,13 +14,12 @@ from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
-from sklearn.base import clone
-from sklearn.pipeline import Pipeline
-
 from skfolio import RiskMeasure
 from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predict
 from skfolio.optimization import MeanRisk
 from skfolio.optimization.convex import ObjectiveFunction
+from sklearn.base import clone
+from sklearn.pipeline import Pipeline
 
 from skfolio_accelerate.compact import EngineCache, estimator_spec
 from skfolio_accelerate.cv_plan import FoldSpec, compile_cv_plan, cpcv_fold_blocks
@@ -36,17 +35,48 @@ _SUPPORTED_OBJECTIVES = {
     ObjectiveFunction.MAXIMIZE_UTILITY,
 }
 _SUPPORTED_RISKS = {RiskMeasure.VARIANCE, RiskMeasure.CVAR}
-_BLOCKED_ATTRS = (
+_UNSUPPORTED_IF_SET = (
+    ("min_budget", "minimum budget"),
+    ("max_budget", "maximum budget"),
+    ("max_short", "maximum short exposure"),
+    ("max_long", "maximum long exposure"),
     ("cardinality", "cardinality (MIP)"),
     ("group_cardinalities", "group_cardinalities (MIP)"),
     ("threshold_long", "threshold_long (MIP)"),
     ("threshold_short", "threshold_short (MIP)"),
+    ("previous_weights", "previous weights"),
+    ("target_weights", "target weights"),
+    ("groups", "groups"),
+    ("linear_constraints", "linear constraints"),
+    ("left_inequality", "left inequality"),
+    ("right_inequality", "right inequality"),
     ("add_constraints", "add_constraints"),
     ("add_objective", "add_objective"),
     ("overwrite_expected_return", "overwrite_expected_return"),
     ("efficient_frontier_size", "efficient_frontier_size"),
     ("mu_uncertainty_set_estimator", "mu uncertainty sets"),
     ("covariance_uncertainty_set_estimator", "covariance uncertainty sets"),
+    ("min_return", "minimum return"),
+    ("max_tracking_error", "maximum tracking error"),
+    ("max_turnover", "maximum turnover"),
+    ("max_mean_absolute_deviation", "maximum mean absolute deviation"),
+    ("max_first_lower_partial_moment", "maximum first lower partial moment"),
+    ("max_variance", "maximum variance"),
+    ("max_standard_deviation", "maximum standard deviation"),
+    ("max_semi_variance", "maximum semi-variance"),
+    ("max_semi_deviation", "maximum semi-deviation"),
+    ("max_worst_realization", "maximum worst realization"),
+    ("max_cvar", "maximum CVaR"),
+    ("max_evar", "maximum EVaR"),
+    ("max_max_drawdown", "maximum drawdown"),
+    ("max_average_drawdown", "maximum average drawdown"),
+    ("max_cdar", "maximum CDaR"),
+    ("max_edar", "maximum EDaR"),
+    ("max_ulcer_index", "maximum ulcer index"),
+    ("max_gini_mean_difference", "maximum Gini mean difference"),
+    ("solver_params", "custom solver parameters"),
+    ("portfolio_params", "estimator portfolio parameters"),
+    ("fallback", "fallback estimator"),
 )
 
 
@@ -103,9 +133,11 @@ def blocked_reason(estimator) -> str | None:
         return "pipelines use skfolio cross_val_predict"
     if not isinstance(estimator, MeanRisk):
         return f"estimator {type(estimator).__name__} is not MeanRisk"
-    for attr, label in _BLOCKED_ATTRS:
+    for attr, label in _UNSUPPORTED_IF_SET:
         if getattr(estimator, attr, None) is not None:
             return f"{label} is not compacted"
+    if getattr(estimator, "budget", 1.0) is None:
+        return "an unspecified equality budget is not compacted"
     if getattr(estimator, "needs_previous_weights", False):
         return "sequential previous_weights (costs, turnover, or fallback)"
     objective = getattr(
@@ -116,14 +148,20 @@ def blocked_reason(estimator) -> str | None:
     risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
-    if getattr(estimator, "min_return", None) is not None:
-        return "min_return is not compacted"
     if _nonzero(getattr(estimator, "l1_coef", 0.0)):
         return "l1_coef is not compacted"
     if isinstance(getattr(estimator, "min_weights", 0.0), dict) or isinstance(
         getattr(estimator, "max_weights", 1.0), dict
     ):
         return "dict weight bounds are not compacted"
+    if _nonzero(getattr(estimator, "transaction_costs", 0.0)):
+        return "transaction costs are not compacted"
+    if _nonzero(getattr(estimator, "management_fees", 0.0)):
+        return "management fees are not compacted"
+    if _nonzero(getattr(estimator, "risk_free_rate", 0.0)):
+        return "a non-zero risk-free rate is not compacted"
+    if getattr(estimator, "raise_on_failure", True) is not True:
+        return "raise_on_failure=False is not compacted"
     if not is_default_empirical(estimator):
         return "custom prior is not compacted"
     return None
@@ -166,6 +204,7 @@ def _run_fold_batch(
     *,
     keep_returns: bool,
     fold_blocks: list[np.ndarray] | None,
+    engines: EngineCache | None = None,
 ) -> dict[str, Any]:
     first_assets = folds[0].asset_idx if folds else None
     if first_assets is not None:
@@ -175,11 +214,11 @@ def _run_fold_batch(
         x_work = X
         blocks = fold_blocks
     cache = OverlapMomentCache(x_work, keep_returns=keep_returns, fold_blocks=blocks)
-    engines = EngineCache(spec=spec)
+    engines = EngineCache(spec=spec) if engines is None else engines
+    warm_before = int(getattr(engines.engine, "n_warm_starts", 0))
     weights: dict[int, np.ndarray] = {}
     moments_s = 0.0
     solve_s = 0.0
-    n_warm = 0
     for i, fold in enumerate(folds):
         t0 = time.perf_counter()
         moments = cache.get(fold, path_key=fold.path_id)
@@ -191,7 +230,7 @@ def _run_fold_batch(
         t1 = time.perf_counter()
         weights[fold.fold_id] = engine.solve(moments, warm=i > 0)
         solve_s += time.perf_counter() - t1
-        n_warm = int(getattr(engine, "n_warm_starts", 0))
+    n_warm = int(getattr(engines.engine, "n_warm_starts", 0)) - warm_before
     return {
         "weights": weights,
         "moments_s": moments_s,
@@ -317,9 +356,7 @@ def cross_val_predict(
         )
         return (pred, report) if return_report else pred
     if blocked is not None:
-        raise ValueError(
-            f"backend={backend!r} cannot compact this predict: {blocked}"
-        )
+        raise ValueError(f"backend={backend!r} cannot compact this predict: {blocked}")
 
     estimator = clone(estimator)
     spec = estimator_spec(estimator)
@@ -328,9 +365,16 @@ def cross_val_predict(
     cv_plan = compile_cv_plan(cv, X, y)
     fold_blocks = None
     if cv_plan.kind == "cpcv":
-        fold_blocks = cpcv_fold_blocks(x_arr.shape[0], int(getattr(cv, "n_folds")))
+        fold_blocks = cpcv_fold_blocks(x_arr.shape[0], int(cv.n_folds))
 
     batches = _path_groups(cv_plan.folds) if cv_plan.kind == "mrc" else [cv_plan.folds]
+    # MRC paths have the same number of assets. Reuse one solver topology across
+    # paths, while deliberately disabling the first warm start of each path.
+    shared_engines = (
+        EngineCache(spec=spec)
+        if cv_plan.kind == "mrc" and spec["risk_measure"] is RiskMeasure.VARIANCE
+        else None
+    )
     merged = _merge_batch_results(
         [
             _run_fold_batch(
@@ -339,6 +383,7 @@ def cross_val_predict(
                 spec,
                 keep_returns=keep_returns,
                 fold_blocks=fold_blocks,
+                engines=shared_engines,
             )
             for batch in batches
         ]

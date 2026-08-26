@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-
-from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
+from scipy.stats import rankdata
 from skfolio.population import Population
+from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 
 
 def _as_matrix(X) -> NDArray[np.float64]:
@@ -19,6 +19,20 @@ def _as_matrix(X) -> NDArray[np.float64]:
     return arr
 
 
+def _contiguous_slice(rows: NDArray[np.intp]) -> slice | None:
+    if rows.size == 0:
+        return None
+    start = int(rows[0])
+    stop = int(rows[-1]) + 1
+    if stop - start != rows.size:
+        return None
+    if rows.size > 1 and int(rows[1]) != start + 1:
+        return None
+    if rows.size > 2 and int(rows[rows.size // 2]) != start + rows.size // 2:
+        return None
+    return slice(start, stop)
+
+
 def path_sharpes(prediction) -> np.ndarray:
     """Sharpe of each path (Population) or the single MultiPeriodPortfolio."""
     if hasattr(prediction, "__len__") and not hasattr(prediction, "sharpe_ratio"):
@@ -26,6 +40,68 @@ def path_sharpes(prediction) -> np.ndarray:
     if hasattr(prediction, "sharpe_ratio"):
         return np.asarray([prediction.sharpe_ratio], dtype=np.float64)
     raise TypeError(f"Unsupported prediction type {type(prediction)!r}")
+
+
+def _ranking_inputs(reference, observed) -> tuple[np.ndarray, np.ndarray]:
+    ref = np.asarray(reference, dtype=np.float64)
+    obs = np.asarray(observed, dtype=np.float64)
+    if ref.ndim != 1 or obs.ndim != 1 or ref.shape != obs.shape:
+        raise ValueError(
+            "reference and observed must be one-dimensional with equal size"
+        )
+    if ref.size == 0 or not np.all(np.isfinite(ref)) or not np.all(np.isfinite(obs)):
+        raise ValueError("ranking scores must be non-empty and finite")
+    return ref, obs
+
+
+def ranking_precision_at_k(reference, observed, *, k: int) -> float:
+    """Fraction of skfolio's top-k portfolios retained in the observed top-k."""
+    ref, obs = _ranking_inputs(reference, observed)
+    if not 1 <= k <= ref.size:
+        raise ValueError(f"k must be between 1 and {ref.size}")
+    ref_top = np.argsort(-ref, kind="stable")[:k]
+    obs_top = np.argsort(-obs, kind="stable")[:k]
+    return float(np.intersect1d(ref_top, obs_top, assume_unique=True).size / k)
+
+
+def spearman_rank_correlation(reference, observed) -> float:
+    """Spearman correlation between skfolio and observed portfolio scores."""
+    ref, obs = _ranking_inputs(reference, observed)
+    if ref.size < 2:
+        raise ValueError("at least two portfolios are required")
+    ranked_ref = rankdata(ref)
+    ranked_obs = rankdata(obs)
+    if np.ptp(ranked_ref) == 0 or np.ptp(ranked_obs) == 0:
+        return float("nan")
+    return float(np.corrcoef(ranked_ref, ranked_obs)[0, 1])
+
+
+def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:
+    """Compute path Sharpes without constructing thousands of Portfolio objects."""
+    matrix = _as_matrix(X)
+    path_returns: list[list[NDArray[np.float64]]] = [[] for _ in range(cv_plan.n_paths)]
+    for fold in cv_plan.folds:
+        weights = weights_by_fold[fold.fold_id]
+        if cv_plan.combinatorial:
+            segments = zip(fold.test_segments, fold.path_ids, strict=False)
+        else:
+            segments = ((fold.test_idx, fold.path_id),)
+        for rows, path_id in segments:
+            row_selector = _contiguous_slice(rows)
+            if row_selector is None:
+                row_selector = rows
+            if fold.asset_idx is None:
+                returns = matrix[row_selector] @ weights
+            else:
+                returns = matrix[row_selector][:, fold.asset_idx] @ weights
+            path_returns[path_id].append(returns)
+
+    sharpes = np.empty(cv_plan.n_paths, dtype=np.float64)
+    for path_id, parts in enumerate(path_returns):
+        returns = np.concatenate(parts)
+        volatility = np.std(returns, ddof=1)
+        sharpes[path_id] = np.mean(returns) / volatility if volatility else np.nan
+    return sharpes
 
 
 def make_segment_portfolio(
@@ -40,10 +116,13 @@ def make_segment_portfolio(
     matrix = _as_matrix(X) if x_np is None else x_np
     rows = np.asarray(idx, dtype=np.intp)
     w = np.asarray(weights, dtype=np.float64)
+    row_selector = _contiguous_slice(rows)
+    if row_selector is None:
+        row_selector = rows
     if cols is None:
-        x_test = matrix[rows]
+        x_test = matrix[row_selector]
     else:
-        x_test = matrix[np.ix_(rows, np.asarray(cols, dtype=np.intp))]
+        x_test = matrix[row_selector][:, np.asarray(cols, dtype=np.intp)]
     return Portfolio(X=x_test, weights=w, name=name)
 
 
@@ -65,7 +144,7 @@ def assemble_prediction(
         for fold in cv_plan.folds:
             w = weights_by_fold[fold.fold_id]
             if cv_plan.combinatorial:
-                pairs = zip(fold.test_segments, fold.path_ids, strict=False)
+                pairs = zip(fold.test_segments, fold.path_ids, strict=True)
             else:
                 pairs = ((fold.test_idx, fold.path_id),)
             for seg, path_id in pairs:
