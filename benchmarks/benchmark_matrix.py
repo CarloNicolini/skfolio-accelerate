@@ -124,6 +124,12 @@ def main() -> None:
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--native-n-jobs", type=int, default=1)
     parser.add_argument("--score-tolerance", type=float, default=1e-6)
+    parser.add_argument(
+        "--only",
+        action="append",
+        default=[],
+        help="run only exact case names (repeatable)",
+    )
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--case", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--cv", type=int, default=0, help=argparse.SUPPRESS)
@@ -168,6 +174,8 @@ def main() -> None:
     writer.writerow(header)
     script = Path(__file__).resolve()
     for case_index, case in enumerate(_cases()):
+        if args.only and case.name not in args.only:
+            continue
         for cv_index, (cv_name, _) in enumerate(_cv_cases(args.quick)):
             common = [
                 "--case",
