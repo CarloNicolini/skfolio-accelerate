@@ -141,6 +141,8 @@ One EVaR randomized case could not complete in Clarabel and automatically fell
 back to skfolio. Peak RSS was typically similar to native because importing
 Python and skfolio dominates these small processes.
 
+![Quick benchmark speedup ranges](docs/figures/quick-benchmark-speedups.svg)
+
 The more useful large test contains 5,040 daily returns. Native skfolio used
 `n_jobs=1`; WalkForward made 228 solves and MRC made 480:
 
@@ -151,6 +153,8 @@ The more useful large test contains 5,040 daily returns. Native skfolio used
 | MAD | 2.2× | 3.1× | `2.1e-6` |
 | CVaR | 3.3× | 4.2× | `7.4e-6` |
 | Max drawdown | 2.1× | 2.6× | `1.6e-7` |
+
+![Representative 20-year workload speedups](docs/figures/long-workload-speedups.svg)
 
 Small six-solve CPCV cases are often near break-even for scenario risks because
 fixed setup dominates. They are not included in the table above. For this
