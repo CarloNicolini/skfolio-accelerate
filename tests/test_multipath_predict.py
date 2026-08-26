@@ -61,6 +61,7 @@ def test_walkforward_path_matches_skfolio():
     assert report.n_prior_fits < report.n_solves
     assert report.n_warm_starts >= 1
     assert report.n_prior_updates >= 1
+    assert np.shares_memory(pred.portfolios[0].X, X)
 
 
 def test_cpcv_population_matches_skfolio():
@@ -74,6 +75,21 @@ def test_cpcv_population_matches_skfolio():
     assert report.n_solves == cv.get_n_splits()
     assert report.n_prior_fits <= cv.n_folds
     assert report.n_prior_fits < report.n_solves
+
+
+def test_purged_cpcv_reuses_blocks_and_matches_skfolio():
+    X = synthetic_returns(120, 6, seed=21)
+    cv = CombinatorialPurgedCV(
+        n_folds=6,
+        n_test_folds=2,
+        purged_size=3,
+        embargo_size=2,
+    )
+    ref = path_sharpes(skfolio_cv_predict(MeanRisk(), X, cv=cv))
+    pred, report = cross_val_predict(MeanRisk(), X, cv=cv, return_report=True)
+    np.testing.assert_allclose(path_sharpes(pred), ref, rtol=2e-3, atol=1e-4)
+    assert report.n_prior_fits == cv.n_folds
+    assert report.n_prior_updates == cv.get_n_splits()
 
 
 def test_smoke_mrc_matches_skfolio():
@@ -94,13 +110,15 @@ def test_smoke_cpcv_flagship_helper():
 
 
 def test_kfold_still_works():
-    X = synthetic_returns(90, 5, seed=8)
-    cv = KFold(n_splits=3, shuffle=False)
+    X = synthetic_returns(100, 5, seed=8)
+    cv = KFold(n_splits=5, shuffle=False)
     ref = skfolio_cv_predict(MeanRisk(), X, cv=cv)
-    pred = cross_val_predict(MeanRisk(), X, cv=cv)
+    pred, report = cross_val_predict(MeanRisk(), X, cv=cv, return_report=True)
     np.testing.assert_allclose(
         pred.sharpe_ratio, ref.sharpe_ratio, rtol=1e-3, atol=1e-4
     )
+    assert report.n_prior_fits == 1
+    assert report.n_prior_updates == 4
 
 
 def test_default_empirical_and_blocked_mip():

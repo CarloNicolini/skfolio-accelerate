@@ -18,6 +18,20 @@ def _as_matrix(X) -> NDArray[np.float64]:
     return arr
 
 
+def _contiguous_slice(rows: NDArray[np.intp]) -> slice | None:
+    if rows.size == 0:
+        return None
+    start = int(rows[0])
+    stop = int(rows[-1]) + 1
+    if stop - start != rows.size:
+        return None
+    if rows.size > 1 and int(rows[1]) != start + 1:
+        return None
+    if rows.size > 2 and int(rows[rows.size // 2]) != start + rows.size // 2:
+        return None
+    return slice(start, stop)
+
+
 def path_sharpes(prediction) -> np.ndarray:
     """Sharpe of each path (Population) or the single MultiPeriodPortfolio."""
     if hasattr(prediction, "__len__") and not hasattr(prediction, "sharpe_ratio"):
@@ -38,10 +52,13 @@ def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:
         else:
             segments = ((fold.test_idx, fold.path_id),)
         for rows, path_id in segments:
+            row_selector = _contiguous_slice(rows)
+            if row_selector is None:
+                row_selector = rows
             if fold.asset_idx is None:
-                returns = matrix[rows] @ weights
+                returns = matrix[row_selector] @ weights
             else:
-                returns = matrix[np.ix_(rows, fold.asset_idx)] @ weights
+                returns = matrix[row_selector][:, fold.asset_idx] @ weights
             path_returns[path_id].append(returns)
 
     sharpes = np.empty(cv_plan.n_paths, dtype=np.float64)
@@ -64,10 +81,13 @@ def make_segment_portfolio(
     matrix = _as_matrix(X) if x_np is None else x_np
     rows = np.asarray(idx, dtype=np.intp)
     w = np.asarray(weights, dtype=np.float64)
+    row_selector = _contiguous_slice(rows)
+    if row_selector is None:
+        row_selector = rows
     if cols is None:
-        x_test = matrix[rows]
+        x_test = matrix[row_selector]
     else:
-        x_test = matrix[np.ix_(rows, np.asarray(cols, dtype=np.intp))]
+        x_test = matrix[row_selector][:, np.asarray(cols, dtype=np.intp)]
     return Portfolio(X=x_test, weights=w, name=name)
 
 
@@ -89,7 +109,7 @@ def assemble_prediction(
         for fold in cv_plan.folds:
             w = weights_by_fold[fold.fold_id]
             if cv_plan.combinatorial:
-                pairs = zip(fold.test_segments, fold.path_ids, strict=False)
+                pairs = zip(fold.test_segments, fold.path_ids, strict=True)
             else:
                 pairs = ((fold.test_idx, fold.path_id),)
             for seg, path_id in pairs:

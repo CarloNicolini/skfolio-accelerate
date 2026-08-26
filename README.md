@@ -25,11 +25,16 @@ For the common MeanRisk variance and CVaR cases, this package avoids doing all
 of the setup again:
 
 - Empirical means and covariances are updated as a window moves instead of
-  being recomputed from scratch. CPCV uses the same idea at the fold level.
+  being recomputed from scratch. KFold reuses the observations shared by
+  consecutive splits. CPCV builds each fold's sufficient statistics once,
+  then adds and subtracts blocks; purged and embargoed rows are corrected
+  exactly.
 - The variance problem is sent directly to OSQP and the CVaR problem directly
   to Clarabel. Their workspaces are reused as the window changes.
 - Randomized paths with the same number of assets share one solver workspace.
 - Hyperparameter candidates share the CV splits and empirical moments.
+- Contiguous test periods are passed to skfolio as NumPy views, avoiding a
+  copy for every portfolio segment.
 
 Small, immutable pieces of solver structure are cached with `lru_cache`.
 Returns, covariance matrices, fitted estimators, and CV plans are deliberately
@@ -116,7 +121,12 @@ for 19,200 optimizations in total.
 The largest absolute difference between the 200 path Sharpe ratios was
 `1.56e-4`.
 
-The second test searches 16 `l2_coef` values on 100 assets with monthly
+On the same data, a 10-fold CPCV run with two test folds, a five-day purge,
+and a five-day embargo took 0.26 seconds instead of 2.45 seconds (9.4×).
+Only the ten base fold moments were fitted; all 45 train combinations were
+assembled from them. The largest path Sharpe difference was `5.42e-5`.
+
+The final test searches 16 `l2_coef` values on 100 assets with monthly
 WalkForward CV.
 
 | 20-year parameter search | Time |

@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 from skfolio.model_selection import (
+    CombinatorialPurgedCV,
     MultipleRandomizedCV,
     WalkForward,
 )
@@ -62,6 +63,40 @@ def main() -> None:
     if reference is not None:
         delta = np.max(np.abs(path_sharpes(prediction) - path_sharpes(reference)))
         print(f"  speedup: {baseline_s / accelerated_s:.2f}×")
+        print(f"  max |path Sharpe difference|: {delta:.3e}")
+
+    cpcv = CombinatorialPurgedCV(
+        n_folds=10,
+        n_test_folds=2,
+        purged_size=5,
+        embargo_size=5,
+    )
+    cpcv_reference = None
+    cpcv_baseline_s = float("nan")
+    if not args.skip_baseline:
+        started = time.perf_counter()
+        cpcv_reference = skfolio_cross_val_predict(MeanRisk(), X, cv=cpcv, n_jobs=-1)
+        cpcv_baseline_s = time.perf_counter() - started
+
+    started = time.perf_counter()
+    cpcv_prediction, cpcv_report = cross_val_predict(
+        MeanRisk(), X, cv=cpcv, return_report=True
+    )
+    cpcv_accelerated_s = time.perf_counter() - started
+    print("20-year purged CPCV")
+    print("  folds: 10; test folds/split: 2; solves: 45")
+    if cpcv_reference is not None:
+        print(f"  skfolio: {cpcv_baseline_s:.3f}s")
+    print(f"  accelerated: {cpcv_accelerated_s:.3f}s")
+    print(
+        f"  moment fits: {cpcv_report.n_prior_fits}; "
+        f"moment updates: {cpcv_report.n_prior_updates}"
+    )
+    if cpcv_reference is not None:
+        delta = np.max(
+            np.abs(path_sharpes(cpcv_prediction) - path_sharpes(cpcv_reference))
+        )
+        print(f"  speedup: {cpcv_baseline_s / cpcv_accelerated_s:.2f}×")
         print(f"  max |path Sharpe difference|: {delta:.3e}")
 
     grid_X = X.iloc[:, :100]
