@@ -1,4 +1,16 @@
-"""Empirical moments with sliding-window and CPCV fold-block reuse."""
+"""Empirical moments with mergeable sufficient statistics.
+
+The cache stores Chan/Welford state ``(n, μ, M₂)`` rather than covariance
+matrices. Adjacent walk-forward windows, KFold overlaps, and CPCV fold blocks
+are then merged or unmerged in ``O(d²)`` (plus a BLAS Gram of the rows that
+actually arrived or left). Prefix covariances cost ``O(T d²)`` total instead of
+recomputing each ``X[:t]`` from scratch.
+
+``M₂`` is the sum of centered outer products. Sample covariance is
+``M₂ / (n - ddof)``. Block construction uses a two-pass Gram; combining blocks
+uses Chan's formula, which reduces to Welford's rank-one update when a block
+has one row.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +28,36 @@ class FoldMoments:
     covariance: NDArray[np.float64]
     returns: NDArray[np.float64]
     n_observations: int = 0
+
+
+@dataclass
+class MomentState:
+    """Mergeable mean / second-moment summary of a set of rows.
+
+    ``m2`` is ``Σ_i (x_i - μ)(x_i - μ)ᵀ``. Two disjoint summaries combine with
+    Chan's formula; removing a subset is the same formula run backwards.
+    """
+
+    n_obs: int
+    mu: NDArray[np.float64]
+    m2: NDArray[np.float64]
+
+    def copy(self) -> MomentState:
+        return MomentState(
+            n_obs=int(self.n_obs),
+            mu=np.array(self.mu, dtype=np.float64, copy=True),
+            m2=np.array(self.m2, dtype=np.float64, copy=True),
+        )
+
+    def covariance(self, ddof: int = 1) -> NDArray[np.float64]:
+        denom = int(self.n_obs) - int(ddof)
+        if denom <= 0:
+            raise ValueError(
+                f"need n_obs > ddof to form covariance, got n_obs={self.n_obs} "
+                f"ddof={ddof}"
+            )
+        cov = self.m2 / denom
+        return np.ascontiguousarray(0.5 * (cov + cov.T), dtype=np.float64)
 
 
 def as_float_2d(X) -> NDArray[np.float64]:
@@ -71,34 +113,105 @@ def _pack(
     )
 
 
+def empty_state(n_assets: int) -> MomentState:
+    d = int(n_assets)
+    return MomentState(
+        n_obs=0,
+        mu=np.zeros(d, dtype=np.float64),
+        m2=np.zeros((d, d), dtype=np.float64),
+    )
+
+
+def state_from_window(window: NDArray[np.float64]) -> MomentState:
+    """Two-pass ``(n, μ, M₂)`` for a block of rows."""
+    data = np.ascontiguousarray(window, dtype=np.float64)
+    if data.ndim == 1:
+        data = data.reshape(-1, 1)
+    n_obs, n_assets = data.shape
+    if n_obs == 0:
+        return empty_state(n_assets)
+    mu = data.mean(axis=0)
+    centered = data - mu
+    m2 = centered.T @ centered
+    if m2.ndim == 0:
+        m2 = np.asarray(m2, dtype=np.float64).reshape(1, 1)
+    return MomentState(
+        n_obs=int(n_obs),
+        mu=np.ascontiguousarray(mu, dtype=np.float64),
+        m2=np.ascontiguousarray(m2, dtype=np.float64),
+    )
+
+
+def merge_states(left: MomentState, right: MomentState) -> MomentState:
+    """Chan merge of two disjoint summaries.
+
+    For a singleton ``right`` this is Welford's rank-one update.
+    """
+    if left.n_obs == 0:
+        return right.copy()
+    if right.n_obs == 0:
+        return left.copy()
+    n_left = int(left.n_obs)
+    n_right = int(right.n_obs)
+    n_obs = n_left + n_right
+    mu = (n_left * left.mu + n_right * right.mu) / n_obs
+    delta = right.mu - left.mu
+    m2 = left.m2 + right.m2 + (n_left * n_right / n_obs) * np.outer(delta, delta)
+    return MomentState(
+        n_obs=n_obs,
+        mu=np.ascontiguousarray(mu, dtype=np.float64),
+        m2=np.ascontiguousarray(m2, dtype=np.float64),
+    )
+
+
+def unmerge_state(total: MomentState, part: MomentState) -> MomentState:
+    """Remove ``part`` from ``total`` when ``part`` is a subset of ``total``."""
+    if part.n_obs == 0:
+        return total.copy()
+    n_obs = int(total.n_obs) - int(part.n_obs)
+    if n_obs < 0:
+        raise ValueError("cannot unmerge more observations than the total holds")
+    if n_obs == 0:
+        return empty_state(int(total.mu.size))
+    mu = (total.n_obs * total.mu - part.n_obs * part.mu) / n_obs
+    delta = part.mu - mu
+    coeff = (n_obs * part.n_obs) / total.n_obs
+    m2 = total.m2 - part.m2 - coeff * np.outer(delta, delta)
+    return MomentState(
+        n_obs=n_obs,
+        mu=np.ascontiguousarray(mu, dtype=np.float64),
+        m2=np.ascontiguousarray(m2, dtype=np.float64),
+    )
+
+
 def empirical_from_window(
     window: NDArray[np.float64], *, keep_returns: bool, ddof: int = 1
 ) -> FoldMoments:
-    t, n = window.shape
-    mu = np.mean(window, axis=0)
-    if n == 1:
-        cov = np.var(window, axis=0, ddof=ddof).reshape(1, 1)
-    else:
-        cov = np.cov(window, rowvar=False, ddof=ddof)
-        if cov.ndim == 0:
-            cov = cov.reshape(1, 1)
+    state = state_from_window(window)
     returns = window if keep_returns else None
-    return _pack(mu, cov, returns, t, keep_returns=keep_returns)
+    return _pack(
+        state.mu,
+        state.covariance(ddof=ddof),
+        returns,
+        state.n_obs,
+        keep_returns=keep_returns,
+    )
 
 
-def empirical_from_stats(
-    n_obs: int,
-    sum_vec: NDArray[np.float64],
-    gram: NDArray[np.float64],
+def _fold_from_state(
+    state: MomentState,
     *,
     returns: NDArray[np.float64] | None,
     keep_returns: bool,
-    ddof: int = 1,
+    ddof: int,
 ) -> FoldMoments:
-    t = int(n_obs)
-    mu = sum_vec / t
-    cov = (gram - np.outer(sum_vec, sum_vec) / t) / (t - ddof)
-    return _pack(mu, cov, returns, t, keep_returns=keep_returns)
+    return _pack(
+        state.mu,
+        state.covariance(ddof=ddof),
+        returns,
+        state.n_obs,
+        keep_returns=keep_returns,
+    )
 
 
 def _contiguous_bounds(idx: NDArray[np.intp]) -> tuple[int, int] | None:
@@ -116,33 +229,23 @@ def _contiguous_bounds(idx: NDArray[np.intp]) -> tuple[int, int] | None:
 
 
 @dataclass
-class _BlockStats:
-    n_obs: int
-    sum_vec: NDArray[np.float64]
-    gram: NDArray[np.float64]
-
-
-@dataclass
 class _SlideState:
     start: int
     stop: int
-    n_obs: int
-    sum_vec: NDArray[np.float64]
-    gram: NDArray[np.float64]
+    moments: MomentState
 
 
 @dataclass
 class _IndexState:
     rows: NDArray[np.intp]
-    sum_vec: NDArray[np.float64]
-    gram: NDArray[np.float64]
+    moments: MomentState
 
 
 class OverlapMomentCache:
     """Empirical moments with sliding-window and CPCV fold-block reuse.
 
-    ``n_fits`` counts cold Gram computations. ``n_updates`` counts rank-k slides
-    or block additions that avoid a full ``X.T @ X`` on the train window.
+    ``n_fits`` counts cold Gram computations. ``n_updates`` counts Chan merges
+    or unmerges that avoid a full centered Gram on the train window.
     """
 
     def __init__(
@@ -160,18 +263,13 @@ class OverlapMomentCache:
         self.n_updates = 0
         self._slide: dict[int, _SlideState] = {}
         self._indexed: dict[int, _IndexState] = {}
-        self._blocks: list[_BlockStats] | None = None
+        self._blocks: list[MomentState] | None = None
         if fold_blocks:
             self._blocks = [self._stats_from_rows(rows) for rows in fold_blocks]
             self.n_fits += len(self._blocks)
 
-    def _stats_from_rows(self, rows: NDArray[np.intp]) -> _BlockStats:
-        window = self.X[rows]
-        return _BlockStats(
-            n_obs=int(rows.size),
-            sum_vec=window.sum(axis=0),
-            gram=window.T @ window,
-        )
+    def _stats_from_rows(self, rows: NDArray[np.intp]) -> MomentState:
+        return state_from_window(self.X[rows])
 
     def get(self, fold: FoldSpec, *, path_key: int = 0) -> FoldMoments:
         if self._blocks is not None and fold.train_block_ids:
@@ -188,54 +286,39 @@ class OverlapMomentCache:
             state = _SlideState(
                 start=start,
                 stop=stop,
-                n_obs=stop - start,
-                sum_vec=window.sum(axis=0),
-                gram=window.T @ window,
+                moments=state_from_window(window),
             )
             self._slide[path_key] = state
             self.n_fits += 1
             returns = window if self.keep_returns else None
-            return empirical_from_stats(
-                state.n_obs,
-                state.sum_vec,
-                state.gram,
+            return _fold_from_state(
+                state.moments,
                 returns=returns,
                 keep_returns=self.keep_returns,
                 ddof=self.ddof,
             )
 
-        gram = prev.gram
-        sum_vec = prev.sum_vec
+        moments = prev.moments
         if start > prev.start:
-            drop = self.X[prev.start : start]
-            gram = gram - drop.T @ drop
-            sum_vec = sum_vec - drop.sum(axis=0)
+            moments = unmerge_state(
+                moments, state_from_window(self.X[prev.start : start])
+            )
         elif start < prev.start:
-            add = self.X[start : prev.start]
-            gram = gram + add.T @ add
-            sum_vec = sum_vec + add.sum(axis=0)
+            moments = merge_states(
+                moments, state_from_window(self.X[start : prev.start])
+            )
         if stop > prev.stop:
-            add = self.X[prev.stop : stop]
-            gram = gram + add.T @ add
-            sum_vec = sum_vec + add.sum(axis=0)
+            moments = merge_states(moments, state_from_window(self.X[prev.stop : stop]))
         elif stop < prev.stop:
-            drop = self.X[stop : prev.stop]
-            gram = gram - drop.T @ drop
-            sum_vec = sum_vec - drop.sum(axis=0)
+            moments = unmerge_state(
+                moments, state_from_window(self.X[stop : prev.stop])
+            )
         self.n_updates += 1
-        state = _SlideState(
-            start=start,
-            stop=stop,
-            n_obs=stop - start,
-            sum_vec=sum_vec,
-            gram=gram,
-        )
+        state = _SlideState(start=start, stop=stop, moments=moments)
         self._slide[path_key] = state
         returns = self.X[start:stop] if self.keep_returns else None
-        return empirical_from_stats(
-            state.n_obs,
-            state.sum_vec,
-            state.gram,
+        return _fold_from_state(
+            moments,
             returns=returns,
             keep_returns=self.keep_returns,
             ddof=self.ddof,
@@ -252,52 +335,34 @@ class OverlapMomentCache:
             if slide is not None:
                 previous = _IndexState(
                     rows=np.arange(slide.start, slide.stop, dtype=np.intp),
-                    sum_vec=slide.sum_vec,
-                    gram=slide.gram,
+                    moments=slide.moments,
                 )
         if previous is not None:
             removed = np.setdiff1d(previous.rows, rows, assume_unique=True)
             added = np.setdiff1d(rows, previous.rows, assume_unique=True)
             if removed.size + added.size < rows.size:
-                sum_vec = previous.sum_vec
-                gram = previous.gram
+                moments = previous.moments
                 if removed.size:
-                    values = self.X[removed]
-                    sum_vec = sum_vec - values.sum(axis=0)
-                    gram = gram - values.T @ values
+                    moments = unmerge_state(moments, state_from_window(self.X[removed]))
                 if added.size:
-                    values = self.X[added]
-                    sum_vec = sum_vec + values.sum(axis=0)
-                    gram = gram + values.T @ values
-                state = _IndexState(
-                    rows=rows,
-                    sum_vec=sum_vec,
-                    gram=gram,
-                )
+                    moments = merge_states(moments, state_from_window(self.X[added]))
+                state = _IndexState(rows=rows, moments=moments)
                 self._indexed[path_key] = state
                 self.n_updates += 1
                 returns = self.X[rows] if self.keep_returns else None
-                return empirical_from_stats(
-                    int(rows.size),
-                    sum_vec,
-                    gram,
+                return _fold_from_state(
+                    moments,
                     returns=returns,
                     keep_returns=self.keep_returns,
                     ddof=self.ddof,
                 )
 
         window = self.X[rows]
-        state = _IndexState(
-            rows=rows,
-            sum_vec=window.sum(axis=0),
-            gram=window.T @ window,
-        )
+        state = _IndexState(rows=rows, moments=state_from_window(window))
         self._indexed[path_key] = state
         self.n_fits += 1
-        return empirical_from_stats(
-            int(rows.size),
-            state.sum_vec,
-            state.gram,
+        return _fold_from_state(
+            state.moments,
             returns=window if self.keep_returns else None,
             keep_returns=self.keep_returns,
             ddof=self.ddof,
@@ -305,27 +370,17 @@ class OverlapMomentCache:
 
     def _from_blocks(self, fold: FoldSpec) -> FoldMoments:
         assert self._blocks is not None
-        n_obs = 0
-        sum_vec = None
-        gram = None
+        moments = empty_state(self.X.shape[1])
         for block_id in fold.train_block_ids:
-            block = self._blocks[block_id]
-            n_obs += block.n_obs
-            sum_vec = block.sum_vec if sum_vec is None else sum_vec + block.sum_vec
-            gram = block.gram if gram is None else gram + block.gram
+            moments = merge_states(moments, self._blocks[block_id])
         if fold.train_excluded_idx.size:
-            excluded = self.X[fold.train_excluded_idx]
-            n_obs -= int(excluded.shape[0])
-            sum_vec = sum_vec - excluded.sum(axis=0)
-            gram = gram - excluded.T @ excluded
+            moments = unmerge_state(
+                moments, state_from_window(self.X[fold.train_excluded_idx])
+            )
         self.n_updates += 1
-        returns = None
-        if self.keep_returns:
-            returns = self.X[fold.train_idx]
-        return empirical_from_stats(
-            n_obs,
-            sum_vec,
-            gram,
+        returns = self.X[fold.train_idx] if self.keep_returns else None
+        return _fold_from_state(
+            moments,
             returns=returns,
             keep_returns=self.keep_returns,
             ddof=self.ddof,

@@ -1,8 +1,8 @@
 """Drop-in for ``skfolio.model_selection.cross_val_predict``.
 
-Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. Every other
-estimator, option, and splitter is forwarded to skfolio so the original CVXPY
-problems and parameters are used unchanged.
+Compact OSQP, Clarabel, and CVXPY Parameter kernels accelerate a subset of
+MeanRisk. Every other estimator, option, and splitter is forwarded to skfolio
+so the original CVXPY problems and parameters are used unchanged.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from sklearn.pipeline import Pipeline
 
 from skfolio_accelerate.compact import EngineCache, estimator_spec
 from skfolio_accelerate.cv_plan import FoldSpec, compile_cv_plan, cpcv_fold_blocks
+from skfolio_accelerate.cvxpy_engine import uses_cvxpy_params
 from skfolio_accelerate.moments import (
     OverlapMomentCache,
     as_float_2d,
@@ -56,7 +57,6 @@ _UNSUPPORTED_IF_SET = (
     ("efficient_frontier_size", "efficient_frontier_size"),
     ("mu_uncertainty_set_estimator", "mu uncertainty sets"),
     ("covariance_uncertainty_set_estimator", "covariance uncertainty sets"),
-    ("min_return", "minimum return"),
     ("max_tracking_error", "maximum tracking error"),
     ("max_turnover", "maximum turnover"),
     ("max_mean_absolute_deviation", "maximum mean absolute deviation"),
@@ -149,7 +149,14 @@ def blocked_reason(estimator) -> str | None:
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
     if _nonzero(getattr(estimator, "l1_coef", 0.0)):
-        return "l1_coef is not compacted"
+        if risk not in {RiskMeasure.VARIANCE}:
+            return "l1_coef is not compacted"
+    min_return = getattr(estimator, "min_return", None)
+    if min_return is not None:
+        if risk is not RiskMeasure.VARIANCE:
+            return "minimum return is not compacted"
+        if np.ndim(min_return) != 0:
+            return "array min_return is not compacted"
     if isinstance(getattr(estimator, "min_weights", 0.0), dict) or isinstance(
         getattr(estimator, "max_weights", 1.0), dict
     ):
@@ -316,9 +323,10 @@ def cross_val_predict(
     """Drop-in for ``skfolio.model_selection.cross_val_predict``.
 
     Call signature matches skfolio (plus ``backend`` and ``return_report``).
-    Compact OSQP/Clarabel is used only when it is equivalent to MeanRisk; every
-    other estimator, risk measure, option, and splitter uses skfolio so the
-    original CVXPY problem is solved unchanged.
+    Compact OSQP, Clarabel, or CVXPY Parameter updates are used only when they
+    represent the same MeanRisk problem; every other estimator, risk measure,
+    option, and splitter uses skfolio so the original CVXPY problem is solved
+    unchanged.
     """
     _cap_native_threads()
     t_wall = time.perf_counter()
@@ -398,9 +406,12 @@ def cross_val_predict(
         portfolio_params=portfolio_params,
     )
     eval_s = time.perf_counter() - t_eval
-    backend_name = (
-        "osqp" if spec["risk_measure"] is RiskMeasure.VARIANCE else "clarabel"
-    )
+    if spec["risk_measure"] is RiskMeasure.CVAR:
+        backend_name = "clarabel"
+    elif uses_cvxpy_params(spec):
+        backend_name = "cvxpy"
+    else:
+        backend_name = "osqp"
     report = AccelerationReport(
         backend=backend_name,
         n_solves=int(merged["n_solves"]),

@@ -1,7 +1,8 @@
 """Compact QP/LP engines for MeanRisk, with warm start across adjacent windows.
 
-VARIANCE is a dense n-variable QP solved by OSQP. CVaR is an LP in (w, alpha, u)
-solved by Clarabel. Neither goes through CVXPY.
+VARIANCE is a dense n-variable QP solved by OSQP, or by a compiled CVXPY
+problem whose ``mu`` / ``cov`` Parameters are updated when L1 or a minimum
+return is present. CVaR is an LP in (w, alpha, u) solved by Clarabel.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from numpy.typing import NDArray
 from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
+from skfolio_accelerate.cvxpy_engine import CvxpyParamEngine, uses_cvxpy_params
 from skfolio_accelerate.moments import FoldMoments
 
 
@@ -101,7 +103,9 @@ def estimator_spec(estimator) -> dict[str, Any]:
         "objective": getattr(
             estimator, "objective_function", ObjectiveFunction.MINIMIZE_RISK
         ),
+        "l1_coef": float(getattr(estimator, "l1_coef", 0.0) or 0.0),
         "l2_coef": float(getattr(estimator, "l2_coef", 0.0) or 0.0),
+        "min_return": getattr(estimator, "min_return", None),
         "risk_aversion": float(getattr(estimator, "risk_aversion", 1.0) or 1.0),
         "cvar_beta": float(getattr(estimator, "cvar_beta", 0.95) or 0.95),
         "min_weights": getattr(estimator, "min_weights", 0.0),
@@ -357,6 +361,8 @@ def make_compact_engine(
 ):
     risk = spec["risk_measure"]
     if risk is RiskMeasure.VARIANCE:
+        if uses_cvxpy_params(spec):
+            return CvxpyParamEngine(spec, n_assets)
         return MinVarianceOSQP(spec, n_assets)
     if risk is RiskMeasure.CVAR:
         if n_observations is None:

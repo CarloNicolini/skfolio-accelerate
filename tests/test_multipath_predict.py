@@ -12,11 +12,13 @@ from skfolio.model_selection import (
     cross_val_predict as skfolio_cv_predict,
 )
 from skfolio.optimization import MeanRisk
+from skfolio.optimization.convex import ObjectiveFunction
 from sklearn.model_selection import KFold
 
 from skfolio_accelerate import cross_val_predict, grid_search, path_sharpes
 from skfolio_accelerate.compact import estimator_spec, make_compact_engine
 from skfolio_accelerate.cv_plan import compile_cv_plan
+from skfolio_accelerate.cvxpy_engine import CvxpyParamEngine, uses_cvxpy_params
 from skfolio_accelerate.flagship import SMOKE_CPCV, SMOKE_MRC, make_cpcv, make_mrc
 from skfolio_accelerate.moments import empirical_from_window, is_default_empirical
 from skfolio_accelerate.predict import blocked_reason
@@ -47,6 +49,46 @@ def test_compact_cvar_matches_mean_risk():
     )
     w = engine.solve(moments, warm=False)
     np.testing.assert_allclose(w, w_sk, atol=1e-6, rtol=0)
+
+
+def test_cvxpy_params_match_mean_risk_with_min_return_and_l1():
+    X = synthetic_returns(80, 8, seed=22)
+    estimators = [
+        MeanRisk(min_return=1e-5),
+        MeanRisk(l1_coef=1e-3, l2_coef=1e-4),
+        MeanRisk(
+            objective_function=ObjectiveFunction.MAXIMIZE_UTILITY,
+            min_return=1e-5,
+            l1_coef=1e-4,
+        ),
+    ]
+    for estimator in estimators:
+        spec = estimator_spec(estimator)
+        assert uses_cvxpy_params(spec)
+        moments = empirical_from_window(
+            np.asarray(X, dtype=np.float64), keep_returns=False
+        )
+        engine = make_compact_engine(spec, n_assets=8, n_observations=None)
+        assert isinstance(engine, CvxpyParamEngine)
+        w = engine.solve(moments, warm=False)
+        w_sk = estimator.fit(X).weights_
+        np.testing.assert_allclose(w, w_sk, atol=5e-4, rtol=0)
+
+
+def test_walkforward_cvxpy_params_reuse_compiled_problem():
+    X = synthetic_returns(120, 8, seed=23)
+    cv = WalkForward(train_size=40, test_size=10)
+    estimator = MeanRisk(min_return=1e-5, l1_coef=1e-4)
+    ref = skfolio_cv_predict(estimator, X, cv=cv)
+    pred, report = cross_val_predict(estimator, X, cv=cv, return_report=True)
+    np.testing.assert_allclose(
+        pred.sharpe_ratio, ref.sharpe_ratio, rtol=1e-3, atol=1e-4
+    )
+    assert report.backend == "cvxpy"
+    assert report.n_solves == cv.get_n_splits(X)
+    assert report.n_prior_fits == 1
+    assert report.n_prior_updates >= 1
+    assert report.n_warm_starts >= 1
 
 
 def test_walkforward_path_matches_skfolio():

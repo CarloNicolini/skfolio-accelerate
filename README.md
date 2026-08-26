@@ -24,13 +24,17 @@ randomized multi-path backtest can contain tens of thousands.
 For the common MeanRisk variance and CVaR cases, this package avoids doing all
 of the setup again:
 
-- Empirical means and covariances are updated as a window moves instead of
-  being recomputed from scratch. KFold reuses the observations shared by
-  consecutive splits. CPCV builds each fold's sufficient statistics once,
-  then adds and subtracts blocks; purged and embargoed rows are corrected
-  exactly.
-- The variance problem is sent directly to OSQP and the CVaR problem directly
-  to Clarabel. Their workspaces are reused as the window changes.
+- Empirical means and covariances are stored as Chan/Welford summaries
+  `(n, μ, M₂)` and merged as a window moves, instead of recomputing each
+  prefix from scratch. Adjacent WalkForward and TimeSeriesSplit windows are
+  rank-k updates. KFold reuses the observations shared by consecutive splits.
+  CPCV builds each fold's sufficient statistics once, then adds and subtracts
+  blocks; purged and embargoed rows are corrected exactly.
+- The boxed variance problem is sent directly to OSQP. When a scalar
+  `min_return` or `l1_coef` is set, the same moments are written into a
+  compiled CVXPY problem through `mu` and `cov` Parameters, so only OSQP's
+  `P`/`q` change. CVaR is sent directly to Clarabel. Solver workspaces are
+  reused as the window changes.
 - Randomized paths with the same number of assets share one solver workspace.
 - Hyperparameter candidates share the CV splits and empirical moments.
 - Contiguous test periods are passed to skfolio as NumPy views, avoiding a
@@ -56,6 +60,7 @@ The compact solver is used only when it represents the same problem:
 - minimize risk or maximize utility
 - the default empirical prior
 - ordinary box and budget constraints
+- optional scalar `min_return` and `l1_coef` on variance (CVXPY Parameter updates)
 
 Everything else is passed to skfolio unchanged. This includes the other
 MeanRisk measures, ratio objectives, mixed-integer constraints, transaction
