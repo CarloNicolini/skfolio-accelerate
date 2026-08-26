@@ -175,6 +175,12 @@ def blocked_reason(estimator) -> str | None:
     risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
+    solver = getattr(estimator, "solver", "CLARABEL")
+    if risk in {RiskMeasure.VARIANCE, RiskMeasure.SEMI_VARIANCE}:
+        if solver not in {"CLARABEL", "OSQP"}:
+            return f"solver {solver!r} is not compacted for {risk.name}"
+    elif solver != "CLARABEL":
+        return f"solver {solver!r} is not compacted for {risk.name}"
     if _nonzero(getattr(estimator, "l1_coef", 0.0)):
         return "l1_coef is not compacted"
     if isinstance(getattr(estimator, "min_weights", 0.0), dict) or isinstance(

@@ -165,6 +165,7 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
         {"previous_weights": np.full(5, 0.2)},
         {"linear_constraints": ["x0 <= 0.5"]},
         {"solver_params": {"max_iter": 1000}},
+        {"solver": "SCS"},
         {"scale_objective": 2.0},
         {"scale_constraints": 2.0},
         {"save_problem": True},

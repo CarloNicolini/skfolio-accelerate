@@ -123,6 +123,7 @@ def main() -> None:
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--native-n-jobs", type=int, default=1)
+    parser.add_argument("--score-tolerance", type=float, default=1e-6)
     parser.add_argument("--worker", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--case", type=int, default=0, help=argparse.SUPPRESS)
     parser.add_argument("--cv", type=int, default=0, help=argparse.SUPPRESS)
@@ -138,6 +139,8 @@ def main() -> None:
         return
     if args.repeats < 1:
         parser.error("--repeats must be positive")
+    if args.score_tolerance < 0:
+        parser.error("--score-tolerance must be non-negative")
 
     header = [
         "case",
@@ -207,12 +210,11 @@ def main() -> None:
             observed = np.asarray(accelerated["scores"], dtype=np.float64)
             max_difference = float(np.max(np.abs(reference - observed)))
             k = max(1, min(5, reference.size))
-            tolerance = max(1e-8, max_difference)
             precision = ranking_precision_at_k(
                 reference,
                 observed,
                 k=k,
-                score_tolerance=tolerance,
+                score_tolerance=args.score_tolerance,
             )
             spearman = (
                 float("nan")
@@ -220,7 +222,7 @@ def main() -> None:
                 else spearman_rank_correlation(
                     reference,
                     observed,
-                    score_tolerance=tolerance,
+                    score_tolerance=args.score_tolerance,
                 )
             )
             report = accelerated["report"]
