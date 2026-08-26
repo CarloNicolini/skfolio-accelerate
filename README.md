@@ -1,119 +1,144 @@
 # skfolio-accelerate
 
-A small add-on for [skfolio](https://github.com/skfolio/skfolio). It is a
-drop-in for `skfolio.model_selection.cross_val_predict`: same estimators,
-parameters, splitters, and return types (`MultiPeriodPortfolio` /
-`Population`). Compact solvers speed up overlapping multi-path backtests
-when they are equivalent to `MeanRisk`.
+`skfolio-accelerate` makes large skfolio backtests less repetitive. It provides
+a drop-in replacement for `skfolio.model_selection.cross_val_predict`, so an
+existing backtest usually needs one import change:
 
 ```python
-from skfolio.optimization import MeanRisk
 from skfolio.model_selection import WalkForward
-
+from skfolio.optimization import MeanRisk
 from skfolio_accelerate import cross_val_predict
 
-pred = cross_val_predict(MeanRisk(), X, cv=WalkForward(train_size=252, test_size=21))
+cv = WalkForward(train_size=2 * 252, test_size=21)
+prediction = cross_val_predict(MeanRisk(), X, cv=cv)
 ```
 
-The return type is the same `MultiPeriodPortfolio` / `Population` as skfolio.
+The result is still a skfolio `MultiPeriodPortfolio` or `Population`.
 
-## How it is faster
+## What is being saved
 
-Thousands of CV splits share almost the same train window. This library does
-not rebuild a CVXPY `MeanRisk` problem on every split. It:
+Long backtests fit almost the same model many times. A monthly walk-forward
+over twenty years contains hundreds of overlapping training windows, while a
+randomized multi-path backtest can contain tens of thousands.
 
-1. **Reuses empirical moments.** Sliding Gram updates on WalkForward / MRC, and
-   fold-block sufficient stats on CPCV, so `n_prior_fits` ≪ `n_solves`.
-2. **Solves a compact QP/LP** with warm starts along time: OSQP for
-   `VARIANCE` (dense n-asset QP), Clarabel for `CVAR` (LP in weights, VaR, and
-   residuals).
-3. **Assembles paths** from NumPy views into skfolio `Portfolio` objects.
+For the common MeanRisk variance and CVaR cases, this package avoids doing all
+of the setup again:
 
-This is a drop-in: the call signature matches skfolio (any estimator, any
-options, any splitter). Compact OSQP/Clarabel is used only when it is
-equivalent to `MeanRisk`; otherwise the original skfolio `fit` / CVXPY
-problem runs unchanged.
+- Empirical means and covariances are updated as a window moves instead of
+  being recomputed from scratch. CPCV uses the same idea at the fold level.
+- The variance problem is sent directly to OSQP and the CVaR problem directly
+  to Clarabel. Their workspaces are reused as the window changes.
+- Randomized paths with the same number of assets share one solver workspace.
+- Hyperparameter candidates share the CV splits and empirical moments.
 
-## Install
+Small, immutable pieces of solver structure are cached with `lru_cache`.
+Returns, covariance matrices, fitted estimators, and CV plans are deliberately
+not kept in a global cache: they are large, depend on mutable inputs, and can
+silently become stale. Those values are reused only inside one call.
+
+## Compatibility
+
+The function accepts the same arguments as skfolio, including `y`, `method`,
+`params`, `column_indices`, and `entry_rebalancing_params`. It works with
+KFold, TimeSeriesSplit, WalkForward, CombinatorialPurgedCV,
+MultipleRandomizedCV, integer `cv`, pipelines, and skfolio optimization
+estimators.
+
+The compact solver is used only when it represents the same problem:
+
+- `MeanRisk`
+- variance or CVaR
+- minimize risk or maximize utility
+- the default empirical prior
+- ordinary box and budget constraints
+
+Everything else is passed to skfolio unchanged. This includes the other
+MeanRisk measures, ratio objectives, mixed-integer constraints, transaction
+costs, turnover, custom priors, uncertainty sets, factor data, pipelines, and
+other optimizers. In those cases skfolio builds and solves its original CVXPY
+problem, so compatibility does not depend on a partial reimplementation here.
+
+Pass `return_report=True` if you want to see which path was selected:
+
+```python
+prediction, report = cross_val_predict(
+    MeanRisk(),
+    X,
+    cv=cv,
+    return_report=True,
+)
+print(report.backend)  # "osqp", "clarabel", or "sklearn"
+```
+
+## Parameter search
+
+`grid_search` is intended for large grids that stay inside the compact
+MeanRisk subset. It scores each candidate by the mean out-of-sample Sharpe
+ratio across paths.
+
+```python
+import numpy as np
+from skfolio_accelerate import grid_search
+
+result = grid_search(
+    MeanRisk(),
+    X,
+    {"l2_coef": np.logspace(-5, -1, 16)},
+    cv=cv,
+)
+
+print(result.best_params_)
+print(result.best_score_)
+prediction = result.best_prediction_
+```
+
+Use skfolio's `OnlineGridSearch`, `OnlineRandomizedSearch`, or sklearn's
+`GridSearchCV` for general estimator searches. The specialized function above
+is faster because all candidates see one compiled CV plan and one stream of
+moment updates.
+
+## Twenty-year benchmark
+
+The benchmark uses 5,040 synthetic daily observations generated by a factor
+model. It ran on a four-core cloud VM with Python 3.12, skfolio 1.0.0, OSQP
+1.1.3, Clarabel 0.11.1, and one BLAS thread.
+
+The first test uses 120 assets and 200 randomized ten-year windows. Each path
+selects 40 assets and rebalances monthly after a two-year training window,
+for 19,200 optimizations in total.
+
+| 20-year randomized backtest | Time |
+|---|---:|
+| skfolio `cross_val_predict(n_jobs=-1)` | 49.85 s |
+| `skfolio_accelerate.cross_val_predict` | 3.58 s |
+| Speedup | **13.9×** |
+
+The largest absolute difference between the 200 path Sharpe ratios was
+`1.56e-4`.
+
+The second test searches 16 `l2_coef` values on 100 assets with monthly
+WalkForward CV.
+
+| 20-year parameter search | Time |
+|---|---:|
+| Repeated skfolio CV | 16.28 s |
+| Shared-moment `grid_search` | 1.76 s |
+| Speedup | **9.3×** |
+
+The largest candidate Sharpe difference was `1.89e-4`. These small differences
+come from the direct OSQP solve and are covered by the numerical parity tests.
+
+Run the same benchmark with:
+
+```bash
+PYTHONPATH=src python benchmarks/benchmark_20_year.py
+```
+
+## Installation and tests
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-```
-
-## Usage
-
-```python
-from skfolio.optimization import MeanRisk
-from skfolio_accelerate import cross_val_predict
-from skfolio_accelerate.flagship import SMOKE_MRC, make_mrc
-
-X, cv = make_mrc(SMOKE_MRC)
-pred, report = cross_val_predict(MeanRisk(), X, cv=cv, return_report=True)
-print(report)
-print(pred.summary())
-```
-
-`return_report=True` adds an `AccelerationReport` with solve counts and phase
-times. `n_jobs` and the rest of the skfolio kwargs (`method`, `params`,
-`column_indices`, `entry_rebalancing_params`, …) are forwarded whenever the
-compact engine does not apply. The compact engine itself is sequential.
-
-## Flagship vs skfolio `cross_val_predict(n_jobs=-1)`
-
-Hardware: cloud VM, Python 3.12, skfolio 1.0.0, OSQP 1.1.3, Clarabel 0.11.1,
-`os.cpu_count()=4`, BLAS threads capped at 1. Factor-model synthetic dailies.
-
-```bash
-PYTHONPATH=src python benchmarks/benchmark_multipath.py
-PYTHONPATH=src python benchmarks/benchmark_multipath.py --quick
-```
-
-The frozen MRC workload is `FLAGSHIP_MRC` in
-[`src/skfolio_accelerate/flagship.py`](src/skfolio_accelerate/flagship.py):
-10y-scale daily frame (2520×80), Palomar-style **500 subsamples** of 25 assets
-on 3-year windows, monthly `WalkForward(train=252, test=21)` → **12 000**
-MeanRisk fits.
-
-| Workload | skfolio `cross_val_predict` | Compact engine | Speedup |
-|---|---|---|---|
-| **FLAGSHIP MRC VARIANCE** (12 000 solves) | **29.25 s** (`n_jobs=-1`) | **2.55 s** (sequential) | **11.5×** |
-| CPCV smoke (15 combinations) | 0.093 s (`n_jobs=-1`) | 0.004 s | **21×** |
-| WalkForward CVaR (24 steps, sequential) | 0.360 s (`n_jobs=1`) | 0.127 s | **2.8×** |
-
-FLAGSHIP MRC VARIANCE phase report:
-
-- Baseline sample `MeanRisk.fit` on a 252×25 window: **8.1 ms** (empirical prior **1.4 ms**, QP **6.7 ms**).
-- Compact: moments **0.31 s**, OSQP (warm-started) **1.29 s**, path assembly **0.45 s**, wall **2.55 s**.
-- **500** prior cold starts vs **12 000** solves; **11 500** sliding Gram updates and solver warm starts.
-- Path Sharpe vs skfolio: max \|Δ\| **2.1×10⁻⁴**.
-
-CVaR uses a compact Clarabel LP (correct to ~1e-7 in weights). It is the right
-kernel when `T` is large; on a short WalkForward it is only a modest win
-because each LP is already cheap.
-
-## Tests
-
-```bash
-source .venv/bin/activate
 pytest
 ```
-
-## Coverage
-
-`cross_val_predict` accepts the same estimators, parameters, and splitters as
-skfolio: `MeanRisk` (all risk measures and objective functions), naive and
-hierarchical estimators, pipelines, `KFold`, `TimeSeriesSplit`, `WalkForward`,
-`CombinatorialPurgedCV`, `MultipleRandomizedCV`, integer `cv`, and skfolio
-kwargs such as `entry_rebalancing_params`.
-
-**Compact (faster, equivalent subset):** `MeanRisk` with
-`MINIMIZE_RISK` / `MAXIMIZE_UTILITY`, `VARIANCE` (OSQP) or `CVAR` (Clarabel LP),
-default `EmpiricalPrior`, and simple box/budget constraints.
-
-**Skfolio path (full CVXPY / estimator `fit`):** every other risk measure
-(semi-variance, CDaR, EVaR, Gini, …), `MAXIMIZE_RATIO`, MIP, costs, turnover,
-custom priors, uncertainty sets, extra constraints, factor `y`, pipelines, and
-non-`MeanRisk` estimators. Those keep skfolio’s own problem, solver, and
-parameters.

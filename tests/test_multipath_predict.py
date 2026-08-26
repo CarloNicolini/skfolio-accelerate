@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import numpy as np
-from sklearn.model_selection import KFold
-
 from skfolio import RiskMeasure
 from skfolio.model_selection import (
     CombinatorialPurgedCV,
     WalkForward,
+)
+from skfolio.model_selection import (
     cross_val_predict as skfolio_cv_predict,
 )
 from skfolio.optimization import MeanRisk
+from sklearn.model_selection import KFold
 
-from skfolio_accelerate import cross_val_predict, path_sharpes
+from skfolio_accelerate import cross_val_predict, grid_search, path_sharpes
 from skfolio_accelerate.compact import estimator_spec, make_compact_engine
 from skfolio_accelerate.cv_plan import compile_cv_plan
 from skfolio_accelerate.flagship import SMOKE_CPCV, SMOKE_MRC, make_cpcv, make_mrc
@@ -53,7 +54,9 @@ def test_walkforward_path_matches_skfolio():
     cv = WalkForward(train_size=40, test_size=10)
     ref = skfolio_cv_predict(MeanRisk(), X, cv=cv)
     pred, report = cross_val_predict(MeanRisk(), X, cv=cv, return_report=True)
-    np.testing.assert_allclose(pred.sharpe_ratio, ref.sharpe_ratio, rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(
+        pred.sharpe_ratio, ref.sharpe_ratio, rtol=1e-3, atol=1e-4
+    )
     assert report.n_solves == cv.get_n_splits(X)
     assert report.n_prior_fits < report.n_solves
     assert report.n_warm_starts >= 1
@@ -95,7 +98,9 @@ def test_kfold_still_works():
     cv = KFold(n_splits=3, shuffle=False)
     ref = skfolio_cv_predict(MeanRisk(), X, cv=cv)
     pred = cross_val_predict(MeanRisk(), X, cv=cv)
-    np.testing.assert_allclose(pred.sharpe_ratio, ref.sharpe_ratio, rtol=1e-3, atol=1e-4)
+    np.testing.assert_allclose(
+        pred.sharpe_ratio, ref.sharpe_ratio, rtol=1e-3, atol=1e-4
+    )
 
 
 def test_default_empirical_and_blocked_mip():
@@ -110,3 +115,67 @@ def test_compile_mrc_records_assets():
     assert plan.multi_path
     assert plan.folds[0].asset_idx is not None
     assert plan.n_paths == SMOKE_MRC["n_subsamples"]
+
+
+def test_grid_search_shares_moments_and_matches_repeated_predict():
+    X = synthetic_returns(100, 6, seed=18)
+    cv = WalkForward(train_size=40, test_size=10)
+    values = [0.0, 1e-3, 1e-2]
+    result = grid_search(MeanRisk(), X, {"l2_coef": values}, cv=cv)
+
+    expected = np.asarray(
+        [
+            cross_val_predict(MeanRisk(l2_coef=value), X, cv=cv).sharpe_ratio
+            for value in values
+        ]
+    )
+    np.testing.assert_allclose(
+        result.cv_results_["mean_test_score"], expected, rtol=1e-12, atol=1e-12
+    )
+    assert result.best_index_ == int(np.argmax(expected))
+    assert result.best_params_ == {"l2_coef": values[result.best_index_]}
+    assert result.acceleration_report_.n_prior_fits == 1
+    assert result.acceleration_report_.n_solves == len(values) * cv.get_n_splits(X)
+
+
+def test_cpcv_grid_search_matches_repeated_predict():
+    X = synthetic_returns(48, 5, seed=19)
+    cv = CombinatorialPurgedCV(n_folds=4, n_test_folds=2)
+    values = [0.0, 1e-2]
+    result = grid_search(MeanRisk(), X, {"l2_coef": values}, cv=cv)
+    expected = np.asarray(
+        [
+            np.mean(path_sharpes(cross_val_predict(MeanRisk(l2_coef=value), X, cv=cv)))
+            for value in values
+        ]
+    )
+    np.testing.assert_allclose(
+        result.cv_results_["mean_test_score"], expected, rtol=1e-12, atol=1e-12
+    )
+
+
+def test_grid_search_rejects_options_not_in_compact_problem():
+    X = synthetic_returns(48, 5, seed=20)
+    cv = WalkForward(train_size=24, test_size=8)
+    with np.testing.assert_raises_regex(ValueError, "maximum variance"):
+        grid_search(
+            MeanRisk(max_variance=1.0),
+            X,
+            {"l2_coef": [0.0, 1e-2]},
+            cv=cv,
+        )
+
+
+def test_mrc_grid_search_matches_repeated_predict():
+    X, cv = make_mrc(SMOKE_MRC)
+    values = [0.0, 1e-2]
+    result = grid_search(MeanRisk(), X, {"l2_coef": values}, cv=cv)
+    expected = np.asarray(
+        [
+            np.mean(path_sharpes(cross_val_predict(MeanRisk(l2_coef=value), X, cv=cv)))
+            for value in values
+        ]
+    )
+    np.testing.assert_allclose(
+        result.cv_results_["mean_test_score"], expected, rtol=1e-12, atol=1e-12
+    )

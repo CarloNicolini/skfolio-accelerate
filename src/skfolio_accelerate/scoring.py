@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 from numpy.typing import NDArray
-
-from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 from skfolio.population import Population
+from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 
 
 def _as_matrix(X) -> NDArray[np.float64]:
@@ -26,6 +25,31 @@ def path_sharpes(prediction) -> np.ndarray:
     if hasattr(prediction, "sharpe_ratio"):
         return np.asarray([prediction.sharpe_ratio], dtype=np.float64)
     raise TypeError(f"Unsupported prediction type {type(prediction)!r}")
+
+
+def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:
+    """Compute path Sharpes without constructing thousands of Portfolio objects."""
+    matrix = _as_matrix(X)
+    path_returns: list[list[NDArray[np.float64]]] = [[] for _ in range(cv_plan.n_paths)]
+    for fold in cv_plan.folds:
+        weights = weights_by_fold[fold.fold_id]
+        if cv_plan.combinatorial:
+            segments = zip(fold.test_segments, fold.path_ids, strict=False)
+        else:
+            segments = ((fold.test_idx, fold.path_id),)
+        for rows, path_id in segments:
+            if fold.asset_idx is None:
+                returns = matrix[rows] @ weights
+            else:
+                returns = matrix[np.ix_(rows, fold.asset_idx)] @ weights
+            path_returns[path_id].append(returns)
+
+    sharpes = np.empty(cv_plan.n_paths, dtype=np.float64)
+    for path_id, parts in enumerate(path_returns):
+        returns = np.concatenate(parts)
+        volatility = np.std(returns, ddof=1)
+        sharpes[path_id] = np.mean(returns) / volatility if volatility else np.nan
+    return sharpes
 
 
 def make_segment_portfolio(

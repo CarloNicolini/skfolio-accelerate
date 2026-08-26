@@ -7,6 +7,7 @@ solved by Clarabel. Neither goes through CVXPY.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Any
 
 import clarabel
@@ -14,7 +15,6 @@ import numpy as np
 import osqp
 import scipy.sparse as sp
 from numpy.typing import NDArray
-
 from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
@@ -51,9 +51,30 @@ def _upper_csc(matrix: NDArray[np.float64]) -> sp.csc_matrix:
     )
 
 
+@lru_cache(maxsize=32)
+def _upper_indices(n: int) -> tuple[NDArray[np.intp], NDArray[np.intp]]:
+    """CSC-ordered indices for a dense upper triangle.
+
+    Only immutable structural metadata is cached. Numeric matrices depend on
+    the data window and must never live in a process-wide cache.
+    """
+    cols = np.repeat(np.arange(n, dtype=np.intp), np.arange(1, n + 1))
+    rows = np.concatenate([np.arange(col + 1, dtype=np.intp) for col in range(n)])
+    rows.flags.writeable = False
+    cols.flags.writeable = False
+    return rows, cols
+
+
+@lru_cache(maxsize=32)
+def _identity(n: int) -> NDArray[np.float64]:
+    identity = np.eye(n, dtype=np.float64)
+    identity.flags.writeable = False
+    return identity
+
+
 def _upper_data(matrix: NDArray[np.float64]) -> NDArray[np.float64]:
-    n = int(matrix.shape[0])
-    return np.concatenate([matrix[: col + 1, col] for col in range(n)])
+    rows, cols = _upper_indices(int(matrix.shape[0]))
+    return matrix[rows, cols]
 
 
 def _clarabel_settings() -> clarabel.DefaultSettings:
@@ -104,6 +125,7 @@ class MinVarianceOSQP:
         self._prob: osqp.OSQP | None = None
         self._x: NDArray[np.float64] | None = None
         self._y: NDArray[np.float64] | None = None
+        self._p_dense = np.empty((n_assets, n_assets), dtype=np.float64)
         self.n_warm_starts = 0
         self._build()
 
@@ -115,7 +137,7 @@ class MinVarianceOSQP:
         self._l = np.concatenate([[self.budget], self.min_w])
         self._u = np.concatenate([[self.budget], self.max_w])
         self._q = np.zeros(n, dtype=np.float64)
-        eye = np.eye(n)
+        eye = _identity(n)
         # Keep the full upper-triangular pattern so later dense Σ updates match nnz.
         p0 = _upper_csc(2.0 * (eye + self.l2 * eye + 1e-16 * np.ones((n, n))))
         self._prob = osqp.OSQP()
@@ -143,19 +165,27 @@ class MinVarianceOSQP:
             if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY
             else 1.0
         )
-        p_dense = 2.0 * (scale * cov + self.l2 * np.eye(n))
+        np.multiply(cov, 2.0 * scale, out=self._p_dense)
+        diagonal = np.diag_indices(n)
+        self._p_dense[diagonal] += 2.0 * self.l2
         q = self._q
         if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
             q = -np.ascontiguousarray(moments.mu, dtype=np.float64)
-        self._prob.update(Px=_upper_data(p_dense), q=q)
+        self._prob.update(Px=_upper_data(self._p_dense), q=q)
         if warm and self._x is not None:
             self._prob.warm_start(x=self._x, y=self._y)
             self.n_warm_starts += 1
+        elif self._x is not None:
+            # OSQP otherwise carries its previous iterate across update calls.
+            self._prob.warm_start(
+                x=np.zeros_like(self._x),
+                y=np.zeros_like(self._y),
+            )
         result = self._prob.solve(raise_error=False)
         status = str(result.info.status).lower()
         if "solved" not in status:
-            p_dense = p_dense + 1e-10 * np.eye(n)
-            self._prob.update(Px=_upper_data(p_dense))
+            self._p_dense[diagonal] += 1e-10
+            self._prob.update(Px=_upper_data(self._p_dense))
             result = self._prob.solve(raise_error=False)
             status = str(result.info.status).lower()
             if "solved" not in status:
@@ -168,7 +198,9 @@ class MinVarianceOSQP:
 class CVaRClarabel:
     """Boxed CVaR LP: min alpha + c 1'u s.t. R w + alpha + u >= 0."""
 
-    def __init__(self, spec: dict[str, Any], n_assets: int, n_observations: int) -> None:
+    def __init__(
+        self, spec: dict[str, Any], n_assets: int, n_observations: int
+    ) -> None:
         self.spec = spec
         self.n_assets = int(n_assets)
         self.n_observations = int(n_observations)
@@ -245,7 +277,6 @@ class CVaRClarabel:
         self._b = b
         self._r_slices: list[slice] = []
         for j in range(n):
-            start = int(self._A.indptr[j])
             stop = int(self._A.indptr[j + 1])
             self._r_slices.append(slice(stop - t, stop))
         p_data = np.zeros(n, dtype=np.float64)
