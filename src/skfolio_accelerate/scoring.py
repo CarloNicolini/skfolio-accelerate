@@ -137,6 +137,21 @@ def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:
     return sharpes
 
 
+def window_view(
+    matrix: NDArray,
+    rows: NDArray[np.intp],
+    cols: NDArray[np.intp] | None = None,
+) -> NDArray:
+    """Row (and optional column) slice, using a view when the rows are contiguous."""
+    rows = np.asarray(rows, dtype=np.intp)
+    row_selector = _contiguous_slice(rows)
+    if row_selector is None:
+        row_selector = rows
+    if cols is None:
+        return matrix[row_selector]
+    return matrix[row_selector][:, np.asarray(cols, dtype=np.intp)]
+
+
 def make_segment_portfolio(
     X,
     weights: NDArray[np.float64],
@@ -145,18 +160,19 @@ def make_segment_portfolio(
     *,
     name: str = "MeanRisk",
     x_np: NDArray[np.float64] | None = None,
+    segment_params: dict | None = None,
 ) -> Portfolio:
     matrix = _as_matrix(X) if x_np is None else x_np
-    rows = np.asarray(idx, dtype=np.intp)
-    w = np.asarray(weights, dtype=np.float64)
-    row_selector = _contiguous_slice(rows)
-    if row_selector is None:
-        row_selector = rows
-    if cols is None:
-        x_test = matrix[row_selector]
-    else:
-        x_test = matrix[row_selector][:, np.asarray(cols, dtype=np.intp)]
-    return Portfolio(X=x_test, weights=w, name=name)
+    x_test = window_view(matrix, np.asarray(idx, dtype=np.intp), cols)
+    extra = {} if segment_params is None else dict(segment_params)
+    extra.pop("name", None)
+    extra.pop("check_observations_order", None)
+    return Portfolio(
+        X=x_test,
+        weights=np.asarray(weights, dtype=np.float64),
+        name=name,
+        **extra,
+    )
 
 
 def assemble_prediction(
@@ -166,6 +182,7 @@ def assemble_prediction(
     *,
     name: str = "MeanRisk",
     portfolio_params: dict | None = None,
+    segment_params: dict | None = None,
 ):
     """Build a skfolio MultiPeriodPortfolio or Population from fold weights."""
     extra = {} if portfolio_params is None else dict(portfolio_params)
@@ -185,7 +202,13 @@ def assemble_prediction(
                     continue
                 path_lists[path_id].append(
                     make_segment_portfolio(
-                        X, w, seg, fold.asset_idx, name=name, x_np=x_np
+                        X,
+                        w,
+                        seg,
+                        fold.asset_idx,
+                        name=name,
+                        x_np=x_np,
+                        segment_params=segment_params,
                     )
                 )
         pop_name = extra.pop("name", "path")
@@ -213,6 +236,7 @@ def assemble_prediction(
             fold.asset_idx,
             name=name,
             x_np=x_np,
+            segment_params=segment_params,
         )
         for fold in ordered
         if fold.test_idx.size

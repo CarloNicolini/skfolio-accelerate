@@ -1,8 +1,10 @@
 """Drop-in for ``skfolio.model_selection.cross_val_predict``.
 
-Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. Every other
-estimator, option, and splitter is forwarded to skfolio so the original CVXPY
-problems and parameters are used unchanged.
+Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. EqualWeighted,
+Random, and default InverseVolatility use closed-form weights. Remaining
+estimators still call native ``fit``, but reuse the compiled CV plan and
+assemble portfolios from ``weights_`` so they skip joblib, train/test copies,
+and ``predict()`` construction when ``n_jobs`` is serial.
 """
 
 from __future__ import annotations
@@ -17,8 +19,15 @@ from typing import Any
 import numpy as np
 from skfolio import RiskMeasure
 from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predict
-from skfolio.optimization import EqualWeighted, InverseVolatility, MeanRisk
+from skfolio.optimization import (
+    BaseOptimization,
+    EqualWeighted,
+    InverseVolatility,
+    MeanRisk,
+    Random,
+)
 from skfolio.optimization.convex import ObjectiveFunction
+from skfolio.utils.stats import rand_weights_dirichlet
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
 
@@ -29,7 +38,7 @@ from skfolio_accelerate.moments import (
     as_float_2d,
     is_default_empirical,
 )
-from skfolio_accelerate.scoring import assemble_prediction
+from skfolio_accelerate.scoring import assemble_prediction, window_view
 
 _SUPPORTED_OBJECTIVES = {
     ObjectiveFunction.MINIMIZE_RISK,
@@ -95,6 +104,14 @@ _UNSUPPORTED_IF_SET = (
     ("fallback", "fallback estimator"),
 )
 
+_CLOSED_FORM_TYPES = (EqualWeighted, InverseVolatility, Random)
+_PORTFOLIO_ATTRS = (
+    "transaction_costs",
+    "management_fees",
+    "previous_weights",
+    "risk_free_rate",
+)
+
 
 @dataclass
 class AccelerationReport:
@@ -147,7 +164,7 @@ def blocked_reason(estimator) -> str | None:
     """Why the compact engine cannot run this estimator, or None if it can."""
     if isinstance(estimator, Pipeline):
         return "pipelines use skfolio cross_val_predict"
-    if type(estimator) in {EqualWeighted, InverseVolatility}:
+    if type(estimator) in _CLOSED_FORM_TYPES:
         if getattr(estimator, "fallback", None) is not None:
             return "fallback estimator is not compacted"
         if getattr(estimator, "previous_weights", None) is not None:
@@ -217,8 +234,6 @@ def compact_blocked_reason(
     """Why this call cannot use the compact engine (estimator or call options)."""
     if method != "predict":
         return "only method='predict' is compacted"
-    if y is not None:
-        return "factor/target y uses skfolio cross_val_predict"
     if params:
         return "fit params use skfolio cross_val_predict"
     if column_indices is not None:
@@ -226,6 +241,42 @@ def compact_blocked_reason(
     if entry_rebalancing_params is not None:
         return "entry_rebalancing_params uses skfolio cross_val_predict"
     return blocked_reason(estimator)
+
+
+def assemble_blocked_reason(
+    estimator,
+    *,
+    method: str = "predict",
+    params: dict | None = None,
+    column_indices=None,
+    entry_rebalancing_params: dict | None = None,
+    n_jobs: int | None = None,
+    cv=None,
+) -> str | None:
+    """Why this call cannot fit natively and assemble from ``weights_``."""
+    if method != "predict":
+        return "only method='predict' is assembled from weights"
+    if params:
+        return "fit params use skfolio cross_val_predict"
+    if column_indices is not None:
+        return "column_indices uses skfolio cross_val_predict"
+    if entry_rebalancing_params is not None:
+        return "entry_rebalancing_params uses skfolio cross_val_predict"
+    if n_jobs not in (None, 1):
+        return "n_jobs!=1 uses skfolio cross_val_predict"
+    if getattr(cv, "shuffle", False) is True:
+        return "shuffled CV uses skfolio cross_val_predict"
+    if isinstance(estimator, Pipeline):
+        return "pipelines use skfolio cross_val_predict"
+    if not isinstance(estimator, BaseOptimization):
+        return f"estimator {type(estimator).__name__} is not a portfolio optimizer"
+    if getattr(estimator, "needs_previous_weights", False):
+        return "sequential previous_weights (costs, turnover, or fallback)"
+    if getattr(estimator, "raise_on_failure", True) is not True:
+        return "raise_on_failure=False uses skfolio cross_val_predict"
+    if getattr(estimator, "efficient_frontier_size", None) is not None:
+        return "efficient_frontier_size uses skfolio cross_val_predict"
+    return None
 
 
 def _path_groups(folds: list[FoldSpec]) -> list[list[FoldSpec]]:
@@ -322,10 +373,14 @@ def _run_closed_form_batch(
         cache = OverlapMomentCache(x_work, keep_returns=False, fold_blocks=blocks)
     weights: dict[int, np.ndarray] = {}
     moments_s = 0.0
+    draw_random = type(estimator) is Random
     for fold in folds:
         if cache is None:
             n_assets = x_work.shape[1]
-            weights[fold.fold_id] = np.full(n_assets, 1.0 / n_assets)
+            if draw_random:
+                weights[fold.fold_id] = rand_weights_dirichlet(n=n_assets)
+            else:
+                weights[fold.fold_id] = np.full(n_assets, 1.0 / n_assets)
             continue
         started = time.perf_counter()
         moments = cache.get(fold, path_key=fold.path_id)
@@ -341,6 +396,96 @@ def _run_closed_form_batch(
         "n_prior_fits": 0 if cache is None else cache.n_fits,
         "n_prior_updates": 0 if cache is None else cache.n_updates,
     }
+
+
+def _as_float_any(data) -> np.ndarray | None:
+    if data is None:
+        return None
+    arr = data.to_numpy(copy=False) if hasattr(data, "to_numpy") else np.asarray(data)
+    if arr.dtype != np.float64:
+        arr = np.asarray(arr, dtype=np.float64)
+    return np.ascontiguousarray(arr)
+
+
+def _segment_params(estimator) -> dict[str, Any]:
+    extra: dict[str, Any] = {}
+    own = getattr(estimator, "portfolio_params", None)
+    if own:
+        extra.update(own)
+    for name in _PORTFOLIO_ATTRS:
+        if name not in extra and hasattr(estimator, name):
+            extra[name] = getattr(estimator, name)
+    extra.pop("name", None)
+    extra.pop("check_observations_order", None)
+    extra.pop("fallback_chain", None)
+    return extra
+
+
+def _train_target(y_arr: np.ndarray | None, fold: FoldSpec, n_assets: int):
+    if y_arr is None:
+        return None
+    cols = fold.asset_idx
+    if y_arr.ndim == 1 or cols is None or y_arr.shape[-1] != n_assets:
+        return window_view(y_arr, fold.train_idx)
+    return window_view(y_arr, fold.train_idx, cols)
+
+
+def _run_fit_assemble_batch(
+    estimator,
+    x_arr: np.ndarray,
+    y_arr: np.ndarray | None,
+    folds: list[FoldSpec],
+) -> dict[str, Any]:
+    n_assets = int(x_arr.shape[1])
+    weights: dict[int, np.ndarray] = {}
+    solve_s = 0.0
+    for fold in folds:
+        started = time.perf_counter()
+        fitted = clone(estimator)
+        x_train = window_view(x_arr, fold.train_idx, fold.asset_idx)
+        y_train = _train_target(y_arr, fold, n_assets)
+        if y_train is None:
+            fitted.fit(x_train)
+        else:
+            fitted.fit(x_train, y_train)
+        weights_ = np.asarray(fitted.weights_, dtype=np.float64)
+        if weights_.ndim != 1:
+            raise ValueError("2-dimensional weights_ cannot be assembled")
+        weights[fold.fold_id] = np.ascontiguousarray(weights_)
+        solve_s += time.perf_counter() - started
+    return {
+        "weights": weights,
+        "moments_s": 0.0,
+        "solve_s": solve_s,
+        "n_solves": len(folds),
+        "n_warm_starts": 0,
+        "n_prior_fits": 0,
+        "n_prior_updates": 0,
+    }
+
+
+def _fit_assemble_prediction(
+    estimator,
+    X,
+    x_arr: np.ndarray,
+    y_arr: np.ndarray | None,
+    cv_plan,
+    portfolio_params: dict | None,
+) -> tuple[Any, dict[str, Any], float]:
+    batches = _path_groups(cv_plan.folds) if cv_plan.kind == "mrc" else [cv_plan.folds]
+    merged = _merge_batch_results(
+        [_run_fit_assemble_batch(estimator, x_arr, y_arr, batch) for batch in batches]
+    )
+    started = time.perf_counter()
+    pred = assemble_prediction(
+        X,
+        cv_plan,
+        merged["weights"],
+        name=type(estimator).__name__,
+        portfolio_params=portfolio_params,
+        segment_params=_segment_params(estimator),
+    )
+    return pred, merged, time.perf_counter() - started
 
 
 def _skfolio_predict(
@@ -394,16 +539,16 @@ def cross_val_predict(
     """Drop-in for ``skfolio.model_selection.cross_val_predict``.
 
     Call signature matches skfolio (plus ``backend`` and ``return_report``).
-    Compact OSQP/Clarabel is used only when it is equivalent to MeanRisk; every
-    other estimator, risk measure, option, and splitter uses skfolio so the
-    original CVXPY problem is solved unchanged.
+    Compact OSQP/Clarabel is used only when it is equivalent to MeanRisk.
+    Closed-form estimators skip ``fit`` entirely. Other serial calls still use
+    native ``fit`` but assemble test portfolios from ``weights_``.
     """
     _cap_native_threads()
     t_wall = time.perf_counter()
     if backend not in {"auto", "compact", "sklearn"}:
         raise ValueError(f"Unknown backend {backend!r}")
 
-    blocked = compact_blocked_reason(
+    compact_reason = compact_blocked_reason(
         estimator,
         y=y,
         method=method,
@@ -411,8 +556,18 @@ def cross_val_predict(
         column_indices=column_indices,
         entry_rebalancing_params=entry_rebalancing_params,
     )
-    use_sklearn = backend == "sklearn" or (backend == "auto" and blocked is not None)
-    if use_sklearn:
+    assemble_reason = assemble_blocked_reason(
+        estimator,
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        n_jobs=n_jobs,
+        cv=cv,
+    )
+    if backend == "sklearn" or (
+        backend == "auto" and compact_reason is not None and assemble_reason is not None
+    ):
         pred = _skfolio_predict(
             estimator,
             X,
@@ -429,15 +584,18 @@ def cross_val_predict(
         )
         report = AccelerationReport(
             backend="sklearn",
-            fallback_reason=blocked or "backend=sklearn",
+            fallback_reason=(compact_reason or assemble_reason or "backend=sklearn"),
             wall_s=time.perf_counter() - t_wall,
         )
         return (pred, report) if return_report else pred
-    if blocked is not None:
-        raise ValueError(f"backend={backend!r} cannot compact this predict: {blocked}")
+    if backend == "compact" and compact_reason is not None:
+        raise ValueError(
+            f"backend={backend!r} cannot compact this predict: {compact_reason}"
+        )
 
     estimator = clone(estimator)
     x_arr = as_float_2d(X)
+    y_arr = _as_float_any(y)
     # A compact numerical failure must retry the exact original split plan.
     # Some splitters accept mutable RandomState objects and advance them in split().
     fallback_cv = copy.deepcopy(cv)
@@ -447,7 +605,7 @@ def cross_val_predict(
         fold_blocks = cpcv_fold_blocks(x_arr.shape[0], int(cv.n_folds))
 
     batches = _path_groups(cv_plan.folds) if cv_plan.kind == "mrc" else [cv_plan.folds]
-    if type(estimator) in {EqualWeighted, InverseVolatility}:
+    if compact_reason is None and type(estimator) in _CLOSED_FORM_TYPES:
         merged = _merge_batch_results(
             [
                 _run_closed_form_batch(
@@ -477,75 +635,113 @@ def cross_val_predict(
         )
         return (pred, report) if return_report else pred
 
-    spec = estimator_spec(estimator)
-    keep_returns = spec["risk_measure"] is not RiskMeasure.VARIANCE
-    # MRC paths have the same number of assets. Reuse one solver topology across
-    # paths, while deliberately disabling the first warm start of each path.
-    shared_engines = (
-        EngineCache(spec=spec)
-        if cv_plan.kind == "mrc" and spec["risk_measure"] is RiskMeasure.VARIANCE
-        else None
-    )
-    try:
-        merged = _merge_batch_results(
-            [
-                _run_fold_batch(
-                    x_arr,
-                    batch,
-                    spec,
-                    keep_returns=keep_returns,
-                    fold_blocks=fold_blocks,
-                    engines=shared_engines,
-                )
-                for batch in batches
-            ]
+    if compact_reason is None:
+        spec = estimator_spec(estimator)
+        keep_returns = spec["risk_measure"] is not RiskMeasure.VARIANCE
+        # MRC paths have the same number of assets. Reuse one solver topology across
+        # paths, while deliberately disabling the first warm start of each path.
+        shared_engines = (
+            EngineCache(spec=spec)
+            if cv_plan.kind == "mrc" and spec["risk_measure"] is RiskMeasure.VARIANCE
+            else None
         )
-    except (RuntimeError, ValueError) as error:
-        pred = _skfolio_predict(
-            estimator,
-            X,
-            y,
-            fallback_cv,
-            n_jobs=n_jobs,
-            method=method,
-            verbose=verbose,
-            params=params,
-            pre_dispatch=pre_dispatch,
-            column_indices=column_indices,
-            portfolio_params=portfolio_params,
-            entry_rebalancing_params=entry_rebalancing_params,
-        )
-        report = AccelerationReport(
-            backend="sklearn",
-            fallback_reason=(
+        try:
+            merged = _merge_batch_results(
+                [
+                    _run_fold_batch(
+                        x_arr,
+                        batch,
+                        spec,
+                        keep_returns=keep_returns,
+                        fold_blocks=fold_blocks,
+                        engines=shared_engines,
+                    )
+                    for batch in batches
+                ]
+            )
+        except (RuntimeError, ValueError) as error:
+            fail_reason = (
                 f"compact {spec['risk_measure'].name} solve failed: "
                 f"{type(error).__name__}: {error}"
-            ),
+            )
+            if assemble_reason is None:
+                pred, merged, eval_s = _fit_assemble_prediction(
+                    estimator,
+                    X,
+                    x_arr,
+                    y_arr,
+                    cv_plan,
+                    portfolio_params,
+                )
+                report = AccelerationReport(
+                    backend="fit-assemble",
+                    n_solves=int(merged["n_solves"]),
+                    solve_s=float(merged["solve_s"]),
+                    eval_s=eval_s,
+                    fallback_reason=fail_reason,
+                    wall_s=time.perf_counter() - t_wall,
+                )
+                return (pred, report) if return_report else pred
+            pred = _skfolio_predict(
+                estimator,
+                X,
+                y,
+                fallback_cv,
+                n_jobs=n_jobs,
+                method=method,
+                verbose=verbose,
+                params=params,
+                pre_dispatch=pre_dispatch,
+                column_indices=column_indices,
+                portfolio_params=portfolio_params,
+                entry_rebalancing_params=entry_rebalancing_params,
+            )
+            report = AccelerationReport(
+                backend="sklearn",
+                fallback_reason=fail_reason,
+                wall_s=time.perf_counter() - t_wall,
+            )
+            return (pred, report) if return_report else pred
+
+        t_eval = time.perf_counter()
+        pred = assemble_prediction(
+            X,
+            cv_plan,
+            merged["weights"],
+            name=type(estimator).__name__,
+            portfolio_params=portfolio_params,
+        )
+        eval_s = time.perf_counter() - t_eval
+        backend_name = (
+            "osqp" if spec["risk_measure"] is RiskMeasure.VARIANCE else "clarabel"
+        )
+        report = AccelerationReport(
+            backend=backend_name,
+            n_solves=int(merged["n_solves"]),
+            n_prior_fits=int(merged["n_prior_fits"]),
+            n_prior_updates=int(merged["n_prior_updates"]),
+            n_warm_starts=int(merged["n_warm_starts"]),
+            moments_s=float(merged["moments_s"]),
+            solve_s=float(merged["solve_s"]),
+            eval_s=eval_s,
             wall_s=time.perf_counter() - t_wall,
         )
         return (pred, report) if return_report else pred
 
-    t_eval = time.perf_counter()
-    pred = assemble_prediction(
+    pred, merged, eval_s = _fit_assemble_prediction(
+        estimator,
         X,
+        x_arr,
+        y_arr,
         cv_plan,
-        merged["weights"],
-        name=type(estimator).__name__,
-        portfolio_params=portfolio_params,
-    )
-    eval_s = time.perf_counter() - t_eval
-    backend_name = (
-        "osqp" if spec["risk_measure"] is RiskMeasure.VARIANCE else "clarabel"
+        portfolio_params,
     )
     report = AccelerationReport(
-        backend=backend_name,
+        backend="fit-assemble",
         n_solves=int(merged["n_solves"]),
-        n_prior_fits=int(merged["n_prior_fits"]),
-        n_prior_updates=int(merged["n_prior_updates"]),
-        n_warm_starts=int(merged["n_warm_starts"]),
-        moments_s=float(merged["moments_s"]),
         solve_s=float(merged["solve_s"]),
         eval_s=eval_s,
+        fallback_reason=compact_reason,
         wall_s=time.perf_counter() - t_wall,
     )
     return (pred, report) if return_report else pred
