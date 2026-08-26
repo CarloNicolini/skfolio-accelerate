@@ -154,3 +154,23 @@ def test_ranking_metrics_have_expected_values():
 
     with pytest.raises(ValueError, match="between 1 and 4"):
         ranking_precision_at_k(reference, observed, k=0)
+
+
+def test_ranking_metrics_treat_numerically_equal_scores_as_ties():
+    reference = [1.0, 0.9, 0.9 - 5e-9, 0.5]
+    observed = [1.0, 0.9 - 5e-9, 0.9, 0.5]
+    assert ranking_precision_at_k(reference, observed, k=2) == 0.5
+    assert (
+        ranking_precision_at_k(
+            reference,
+            observed,
+            k=2,
+            score_tolerance=1e-8,
+        )
+        == 1.0
+    )
+    assert spearman_rank_correlation(
+        reference,
+        observed,
+        score_tolerance=1e-8,
+    ) == pytest.approx(1.0)
