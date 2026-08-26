@@ -2,8 +2,12 @@
 
 The compact OSQP engine is faster for boxed min-variance. This engine exists
 for MeanRisk cases that still only need ``(μ, Σ)`` but add a linear return
-constraint or an L1 term. CVXPY compiles the QP once (DPP); later windows
-only write ``mu.value`` / ``cov.value`` and warm-start OSQP.
+constraint or an L1 term.
+
+``cp.quad_form(w, Σ)`` with a PSD Parameter is DPP only on recent CVXPY.
+``||Lᵀ w||²`` with ``L`` a Parameter is DPP on every CVXPY that skfolio 1.x
+pulls in, so each window factorizes ``Σ_t = L Lᵀ`` and writes ``Lᵀ`` and
+``μ`` into the compiled QP.
 """
 
 from __future__ import annotations
@@ -37,6 +41,20 @@ def uses_cvxpy_params(spec: dict[str, Any]) -> bool:
     return spec.get("min_return") is not None
 
 
+def _cholesky(cov: NDArray[np.float64]) -> NDArray[np.float64]:
+    """Lower-triangular factor of a symmetric covariance, with light jitter."""
+    n = int(cov.shape[0])
+    symmetric = np.ascontiguousarray(0.5 * (cov + cov.T), dtype=np.float64)
+    jitter = 0.0
+    eye = np.eye(n, dtype=np.float64)
+    for _ in range(6):
+        try:
+            return np.linalg.cholesky(symmetric + jitter * eye)
+        except np.linalg.LinAlgError:
+            jitter = 1e-10 if jitter == 0.0 else jitter * 10.0
+    raise RuntimeError("covariance is not positive definite")
+
+
 class CvxpyParamEngine:
     """Boxed mean-variance QP compiled once, then updated through Parameters."""
 
@@ -59,9 +77,10 @@ class CvxpyParamEngine:
     def _build(self) -> None:
         n = self.n_assets
         self._mu = cp.Parameter(n)
-        self._cov = cp.Parameter((n, n), PSD=True)
+        # Lᵀ from Σ = L Lᵀ. sum_squares(Lᵀ w) is DPP for all supported CVXPY.
+        self._chol_t = cp.Parameter((n, n))
         self._w = cp.Variable(n)
-        risk = cp.quad_form(self._w, self._cov)
+        risk = cp.sum_squares(self._chol_t @ self._w)
         reg = self.l2 * cp.sum_squares(self._w)
         if self.l1 != 0.0:
             reg = reg + self.l1 * cp.norm1(self._w)
@@ -80,7 +99,7 @@ class CvxpyParamEngine:
             objective = cp.Minimize(risk + reg)
         self._problem = cp.Problem(objective, constraints)
         self._mu.value = np.zeros(n, dtype=np.float64)
-        self._cov.value = np.eye(n, dtype=np.float64)
+        self._chol_t.value = np.eye(n, dtype=np.float64)
 
     def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
         n = self.n_assets
@@ -91,25 +110,29 @@ class CvxpyParamEngine:
         if mu.shape != (n,):
             raise ValueError(f"mu shape {mu.shape} != {(n,)}")
         self._mu.value = mu
-        self._cov.value = np.ascontiguousarray(0.5 * (cov + cov.T), dtype=np.float64)
+        self._chol_t.value = _cholesky(cov).T
         weights = self._solve(warm=warm)
         if weights is None:
-            self._cov.value = self._cov.value + 1e-10 * np.eye(n)
+            self._chol_t.value = _cholesky(cov + 1e-8 * np.eye(n)).T
             weights = self._solve(warm=False)
         if weights is None:
             raise RuntimeError(f"CVXPY failed: {self._problem.status}")
         return weights
 
     def _solve(self, *, warm: bool) -> NDArray[np.float64] | None:
-        self._problem.solve(
-            solver=cp.OSQP,
-            warm_start=bool(warm and self._solved_once),
-            verbose=False,
-            eps_abs=1e-8,
-            eps_rel=1e-8,
-            max_iter=4000,
-            polishing=False,
-        )
+        solve_kwargs: dict[str, Any] = {
+            "solver": cp.OSQP,
+            "warm_start": bool(warm and self._solved_once),
+            "verbose": False,
+            "eps_abs": 1e-8,
+            "eps_rel": 1e-8,
+            "max_iter": 4000,
+        }
+        # OSQP 1.x renamed polish → polishing; accept whichever this CVXPY maps.
+        try:
+            self._problem.solve(polishing=False, **solve_kwargs)
+        except TypeError:
+            self._problem.solve(polish=False, **solve_kwargs)
         if warm and self._solved_once:
             self.n_warm_starts += 1
         self._solved_once = True
