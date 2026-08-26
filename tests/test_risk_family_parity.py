@@ -225,11 +225,9 @@ def test_compact_failure_preserves_mutable_randomized_cv_plan(monkeypatch):
         compact, "make_compact_engine", lambda *args, **kwargs: FailingEngine()
     )
     X = synthetic_returns(96, 6, seed=94)
-    cv = MultipleRandomizedCV(
-        walk_forward=WalkForward(train_size=36, test_size=12),
-        n_subsamples=3,
-        asset_subset_size=4,
-        window_size=84,
+    cv = KFold(
+        n_splits=3,
+        shuffle=True,
         random_state=np.random.RandomState(95),
     )
     reference = skfolio_cv_predict(
