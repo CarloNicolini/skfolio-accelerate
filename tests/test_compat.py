@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
+import skfolio.optimization as optimization
 from skfolio import RiskMeasure
 from skfolio.model_selection import CombinatorialPurgedCV, WalkForward
 from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
 from skfolio.optimization import (
+    BaseOptimization,
     EqualWeighted,
     HierarchicalRiskParity,
     InverseVolatility,
@@ -22,6 +26,33 @@ from skfolio_accelerate import cross_val_predict, path_sharpes
 from skfolio_accelerate.flagship import SMOKE_MRC, make_mrc
 from skfolio_accelerate.predict import blocked_reason
 from tests.helpers import synthetic_returns
+
+
+def _direct_public_estimators():
+    cases = []
+    for name in dir(optimization):
+        estimator_type = getattr(optimization, name)
+        if (
+            name.startswith("Base")
+            or estimator_type is MeanRisk
+            or not inspect.isclass(estimator_type)
+            or not issubclass(estimator_type, BaseOptimization)
+        ):
+            continue
+        signature = inspect.signature(estimator_type)
+        required = [
+            parameter
+            for parameter in signature.parameters.values()
+            if parameter.default is inspect.Parameter.empty
+            and parameter.kind
+            not in {
+                inspect.Parameter.VAR_POSITIONAL,
+                inspect.Parameter.VAR_KEYWORD,
+            }
+        ]
+        if not required:
+            cases.append(pytest.param(estimator_type, id=name))
+    return cases
 
 
 def _assert_same_paths(pred, ref, *, rtol=2e-3, atol=1e-4):
@@ -120,3 +151,38 @@ def test_mrc_and_pipeline_use_skfolio_path():
     pred2, report2 = cross_val_predict(pipe, X2, cv=3, return_report=True)
     _assert_same_paths(pred2, ref2)
     assert report2.backend == "sklearn"
+
+
+@pytest.mark.parametrize("estimator_type", _direct_public_estimators())
+def test_directly_constructible_public_estimators_match_native(estimator_type):
+    X = synthetic_returns(72, 5, seed=24)
+    y = synthetic_returns(72, 1, seed=25).ravel()
+    cv = WalkForward(train_size=36, test_size=12)
+    np.random.seed(26)
+    try:
+        reference = skfolio_cv_predict(
+            estimator_type(),
+            X,
+            y=y,
+            cv=cv,
+            n_jobs=1,
+        )
+    except Exception as error:
+        pytest.skip(f"native skfolio limitation: {type(error).__name__}: {error}")
+    np.random.seed(26)
+    observed, report = cross_val_predict(
+        estimator_type(),
+        X,
+        y=y,
+        cv=WalkForward(train_size=36, test_size=12),
+        n_jobs=1,
+        return_report=True,
+    )
+    np.testing.assert_allclose(
+        path_sharpes(observed),
+        path_sharpes(reference),
+        rtol=1e-8,
+        atol=1e-10,
+    )
+    # Supplying y deliberately keeps closed-form estimators on native skfolio.
+    assert report.backend == "sklearn"

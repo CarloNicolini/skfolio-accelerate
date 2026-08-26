@@ -1,7 +1,8 @@
-"""Compact QP/LP engines for MeanRisk, with warm start across adjacent windows.
+"""Direct MeanRisk QP, LP, SOCP, and exponential-cone engines.
 
-VARIANCE is a dense n-variable QP solved by OSQP. CVaR is an LP in (w, alpha, u)
-solved by Clarabel. Neither goes through CVXPY.
+Variance uses OSQP. Scenario, downside, and drawdown families use Clarabel.
+All engines bypass CVXPY and reuse fixed sparse topology only while dimensions
+and compact eligibility remain equivalent.
 """
 
 from __future__ import annotations
@@ -796,118 +797,6 @@ class ScenarioClarabel:
                 f"Clarabel {self.spec['risk_measure'].name} failed: {solution.status}"
             )
         return np.asarray(solution.x[: self.n_assets], dtype=np.float64)
-
-
-class SemiVarianceOSQP:
-    """Exact downside-square QP with fixed scenario topology."""
-
-    def __init__(
-        self, spec: dict[str, Any], n_assets: int, n_observations: int
-    ) -> None:
-        self.spec = spec
-        self.n_assets = int(n_assets)
-        self.n_observations = int(n_observations)
-        self.min_w = _as_bounds(spec["min_weights"], n_assets, 0.0)
-        self.max_w = _as_bounds(spec["max_weights"], n_assets, 1.0)
-        self.budget = float(spec["budget"])
-        self.l2 = float(spec["l2_coef"])
-        self.objective = spec["objective"]
-        self.risk_aversion = float(spec["risk_aversion"])
-        self._prob: osqp.OSQP | None = None
-        self._x: NDArray[np.float64] | None = None
-        self._y: NDArray[np.float64] | None = None
-        self.n_warm_starts = 0
-
-    def _matrices(
-        self, moments: FoldMoments
-    ) -> tuple[
-        sp.csc_matrix,
-        NDArray[np.float64],
-        sp.csc_matrix,
-        NDArray[np.float64],
-        NDArray[np.float64],
-    ]:
-        deviations = _scenario_deviations(moments, self.spec["min_acceptable_return"])
-        t, n = deviations.shape
-        nv = n + t
-        lam = (
-            self.risk_aversion
-            if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY
-            else 1.0
-        )
-        p_diag = np.concatenate(
-            [
-                np.full(n, 2.0 * self.l2),
-                np.full(t, 2.0 * lam / (t - 1)),
-            ]
-        )
-        P = sp.diags(p_diag, format="csc")
-        q = np.zeros(nv, dtype=np.float64)
-        if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
-            q[:n] = -np.asarray(moments.mu, dtype=np.float64)
-
-        rows: list[list[tuple[int, float]]] = [[(j, 1.0) for j in range(n)]]
-        lower = [self.budget]
-        upper = [self.budget]
-        for j in range(n):
-            rows.append([(j, 1.0)])
-            lower.append(float(self.min_w[j]))
-            upper.append(float(self.max_w[j]))
-        for k in range(t):
-            rows.append([(n + k, 1.0)])
-            lower.append(0.0)
-            upper.append(np.inf)
-        for k in range(t):
-            rows.append(
-                [(j, float(deviations[k, j])) for j in range(n)] + [(n + k, 1.0)]
-            )
-            lower.append(0.0)
-            upper.append(np.inf)
-        return (
-            P,
-            q,
-            _rows_to_csc(rows, nv),
-            np.asarray(lower, dtype=np.float64),
-            np.asarray(upper, dtype=np.float64),
-        )
-
-    def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
-        t = int(moments.n_observations)
-        if t != self.n_observations:
-            self.n_observations = t
-            self._prob = None
-            self._x = self._y = None
-        P, q, A, lower, upper = self._matrices(moments)
-        if self._prob is None:
-            self._prob = osqp.OSQP()
-            self._prob.setup(
-                P=P,
-                q=q,
-                A=A,
-                l=lower,
-                u=upper,
-                verbose=False,
-                warm_starting=True,
-                polishing=False,
-                eps_abs=1e-8,
-                eps_rel=1e-8,
-                max_iter=10000,
-            )
-        else:
-            self._prob.update(q=q, Ax=A.data, l=lower, u=upper)
-            if warm and self._x is not None:
-                self._prob.warm_start(x=self._x, y=self._y)
-                self.n_warm_starts += 1
-            elif self._x is not None:
-                self._prob.warm_start(
-                    x=np.zeros_like(self._x), y=np.zeros_like(self._y)
-                )
-        result = self._prob.solve(raise_error=False)
-        if "solved" not in str(result.info.status).lower():
-            raise RuntimeError(f"OSQP SEMI_VARIANCE failed: {result.info.status}")
-        self._x = np.asarray(result.x, dtype=np.float64)
-        self._y = np.asarray(result.y, dtype=np.float64)
-        return self._x[: self.n_assets].copy()
 
 
 def make_compact_engine(

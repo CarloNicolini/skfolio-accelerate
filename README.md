@@ -21,16 +21,17 @@ Long backtests fit almost the same model many times. A monthly walk-forward
 over twenty years contains hundreds of overlapping training windows, while a
 randomized multi-path backtest can contain tens of thousands.
 
-For the common MeanRisk variance and CVaR cases, this package avoids doing all
-of the setup again:
+For compact-compatible MeanRisk and simple closed-form cases, this package
+avoids doing all of the setup again:
 
 - Empirical means and covariances are updated as a window moves instead of
   being recomputed from scratch. KFold reuses the observations shared by
   consecutive splits. CPCV builds each fold's sufficient statistics once,
   then adds and subtracts blocks; purged and embargoed rows are corrected
   exactly.
-- The variance problem is sent directly to OSQP and the CVaR problem directly
-  to Clarabel. Their workspaces are reused as the window changes.
+- Variance is sent directly to OSQP. Scenario LPs, QPs, second-order cones, and
+  exponential cones are sent directly to Clarabel. Their fixed-dimension
+  workspaces are updated as the window changes.
 - Randomized paths with the same number of assets share one solver workspace.
 - Hyperparameter candidates share the CV splits and empirical moments.
 - Contiguous test periods are passed to skfolio as NumPy views, avoiding a
@@ -49,19 +50,41 @@ KFold, TimeSeriesSplit, WalkForward, CombinatorialPurgedCV,
 MultipleRandomizedCV, integer `cv`, pipelines, and skfolio optimization
 estimators.
 
-The compact solver is used only when it represents the same problem:
+The compact solver is used only for `MeanRisk` with minimize-risk or
+maximize-utility objectives, the default empirical prior, and ordinary box
+plus equality-budget constraints. The supported risks and exact formulations
+are:
 
-- `MeanRisk`
-- variance or CVaR
-- minimize risk or maximize utility
-- the default empirical prior
-- ordinary box and budget constraints
+| Risk | Compact formulation | Solver |
+|---|---|---|
+| Variance | sample-covariance QP | OSQP |
+| Semi-variance | `sum(u²)/(T-1)`, `u >= -(R-MAR)w`, `u >= 0` | Clarabel QP |
+| Semi-deviation | same downside variables with `norm(u)/sqrt(T-1)` | Clarabel SOCP |
+| MAD | `2 sum(u)/T`, `u >= -(R-MAR)w`, `u >= 0` | Clarabel LP/QP |
+| First lower partial moment | `sum(u)/T` with the same downside epigraph | Clarabel LP/QP |
+| Worst realization | `z >= -Rw` | Clarabel LP/QP |
+| CVaR | `alpha + sum(u)/(T(1-beta))` | Clarabel LP/QP |
+| Max/average drawdown and CDaR | ordered linear drawdown recurrence | Clarabel LP/QP |
+| EVaR and EDaR | skfolio's perspective exponential-cone model | Clarabel |
 
-Everything else is passed to skfolio unchanged. This includes the other
-MeanRisk measures, ratio objectives, mixed-integer constraints, transaction
-costs, turnover, custom priors, uncertainty sets, factor data, pipelines, and
-other optimizers. In those cases skfolio builds and solves its original CVXPY
-problem, so compatibility does not depend on a partial reimplementation here.
+`MAR` has skfolio's exact meaning: when no minimum acceptable return is given,
+it is the fitted empirical mean, so the scenario matrix is `(R - mean(R))`.
+Drawdown optimization uses skfolio's ordered, non-compounded recurrence.
+Scenario rows, empirical moments, sparse topology, and solver iterates are
+reused only inside the current call and only while dimensions are equivalent.
+
+Default `EqualWeighted` and default-empirical `InverseVolatility` also use
+closed-form paths. Inverse volatility shares the same per-call covariance
+updates.
+
+Everything else is passed to skfolio unchanged. This includes standard
+deviation, ulcer index, Gini mean difference, ratio/return objectives,
+mixed-integer/group/linear constraints, risk limits, transaction costs,
+management fees, turnover, previous or target weights, custom priors,
+uncertainty sets, factor data, custom solver parameters/scaling, pipelines,
+and other optimizers. A compact numerical failure is also retried through
+native skfolio and reported as fallback. Native errors are not relabeled as
+accelerator errors.
 
 This is an intentional correctness boundary, not a general acceleration claim.
 For an arbitrary skfolio estimator, safely caching a fitted prior or solver
@@ -77,7 +100,7 @@ prediction, report = cross_val_predict(
     cv=cv,
     return_report=True,
 )
-print(report.backend)  # "osqp", "clarabel", or "sklearn"
+print(report.backend)  # "osqp", "clarabel", "closed-form", or "sklearn"
 ```
 
 ## Checking portfolio rankings
@@ -94,11 +117,21 @@ from skfolio_accelerate import (
 
 precision = ranking_precision_at_k(reference_scores, accelerated_scores, k=5)
 correlation = spearman_rank_correlation(reference_scores, accelerated_scores)
+
+# Treat score gaps below the numerical tolerance as ties.
+tie_aware = ranking_precision_at_k(
+    reference_scores,
+    accelerated_scores,
+    k=5,
+    score_tolerance=1e-6,
+)
 ```
 
-Precision@k measures how much of skfolio's top-k set is retained. Spearman
-correlation compares the complete ordering. Spearman is `nan` when either set
-is constant because no ranking exists.
+Precision@k measures how much of skfolio's top-k set is retained. With a score
+tolerance, candidates tied with skfolio's kth score are accepted instead of
+being penalized for an arbitrary numerical ordering. Spearman correlation
+compares the complete ordering and can use the same tolerance to form tie
+groups. Spearman is `nan` when either set is constant because no ranking exists.
 
 ## Parameter search
 
@@ -127,67 +160,70 @@ Use skfolio's `OnlineGridSearch`, `OnlineRandomizedSearch`, or sklearn's
 is faster because all candidates see one compiled CV plan and one stream of
 moment updates.
 
-## Twenty-year benchmark
+## Benchmarks
 
-The benchmark uses 5,040 synthetic daily observations generated by a factor
-model. It ran on a four-core cloud VM with Python 3.12, skfolio 1.0.0, OSQP
-1.1.3, Clarabel 0.11.1, and one BLAS thread.
+`benchmark_matrix.py` runs each case in an isolated process. A sampling thread
+records peak RSS for the process and all worker descendants, so parallel native
+runs are included. It reports median wall time, median absolute deviation,
+peak RSS, solve/moment/warm-start counts, maximum Sharpe difference, tie-aware
+precision@k and Spearman correlation, backend, and fallback reason.
 
-The first test uses 120 assets and 200 randomized ten-year windows. Each path
-selects 40 assets and rebalances monthly after a two-year training window,
-for 19,200 optimizations in total.
-
-| 20-year randomized backtest | Time |
-|---|---:|
-| skfolio `cross_val_predict(n_jobs=-1)` | 50.23 s |
-| `skfolio_accelerate.cross_val_predict` | 3.81 s |
-| Speedup | **13.2×** |
-
-The largest absolute difference between the 200 path Sharpe ratios was
-`1.56e-4`. Path ranking precision@20 was `1.000`, with Spearman correlation
-`0.999965`.
-
-On the same data, a 10-fold CPCV run with two test folds, a five-day purge,
-and a five-day embargo took 0.06 seconds instead of 0.50 seconds (7.9×).
-Only the ten base fold moments were fitted; all 45 train combinations were
-assembled from them. The largest path Sharpe difference was `4.16e-5`, and
-Spearman correlation was `0.983333`. Precision@3 was `0.667`: one path crossed
-the third-place boundary, while the top two and top four sets were unchanged.
-
-The final test searches 16 `l2_coef` values on 100 assets with monthly
-WalkForward CV.
-
-| 20-year parameter search | Time |
-|---|---:|
-| Repeated skfolio CV | 16.34 s |
-| Shared-moment `grid_search` | 1.75 s |
-| Speedup | **9.4×** |
-
-The largest candidate Sharpe difference was `1.89e-4`. These small differences
-come from the direct OSQP solve. Candidate precision@5 was `1.000`, with
-Spearman correlation `0.991176`.
-
-Run the same benchmark with:
+The quick matrix covers every `RiskMeasure`, directly constructible public
+optimizers, and WalkForward, purged CPCV, and MultipleRandomizedCV:
 
 ```bash
-PYTHONPATH=src python benchmarks/benchmark_20_year.py
+PYTHONPATH=src python benchmarks/benchmark_matrix.py --quick --repeats 3
 ```
 
-`benchmark_coverage.py` measures the broader compatibility surface: every
-`MeanRisk` risk measure and each directly constructible public optimizer across
-WalkForward, purged CPCV, and MultipleRandomizedCV. It reports native failures
-separately rather than attributing them to this package:
+On this cloud VM (Python 3.12, skfolio 1.0.0), the repeated quick results were:
+
+- Structured variance: 19.9–29.6× faster.
+- Structured semi-variance/deviation: 5.8–8.9× faster.
+- MAD, first lower partial moment, worst realization, and drawdown LPs:
+  7.0–12.7× faster.
+- CVaR: 8.6–15.2× faster.
+- EVaR: 5.5–7.8× when the compact cone solved; one MRC case retried native
+  after Clarabel reported insufficient progress.
+- EqualWeighted and InverseVolatility: 4.5–14.2× faster.
+- Generic fallback: approximately 1×, as expected.
+
+All solvable cases retained tie-aware precision@k of 1.0. Native EDaR failed
+on two of the three quick synthetic cases; those are reported as native solver
+limitations. Structured peak-RSS ratios were about 0.97–0.98, while fallback
+was about 1.0. Absolute RSS is dominated by the Python/skfolio import baseline,
+so the ratio should not be interpreted as solver workspace size alone.
+
+For representative 5,040-day workloads, native skfolio used `n_jobs=1`.
+WalkForward had 228 solves and MRC had 480 solves:
+
+| Risk | WalkForward speedup | MRC speedup | max path Sharpe difference |
+|---|---:|---:|---:|
+| Variance | 62.1× | 75.3× | `4.3e-5` |
+| Semi-variance | 2.3× | 3.0× | `1.1e-16` |
+| MAD | 2.2× | 3.1× | `2.1e-6` |
+| CVaR | 3.3× | 4.2× | `7.4e-6` |
+| Max drawdown | 2.1× | 2.6× | `1.6e-7` |
+
+Peak-RSS ratios for these runs were 0.96–0.99. Small six-solve CPCV cases gave
+only 0.98–1.12× for the scenario engines because fixed setup dominates; they
+are not included in a headline average. Semi-variance uses direct Clarabel:
+OSQP was mathematically valid but measured at only 0.69× on the 20-asset
+WalkForward workload.
+
+Reproduce a focused 20-year run with:
 
 ```bash
-PYTHONPATH=src python benchmarks/benchmark_coverage.py --quick
+PYTHONPATH=src python benchmarks/benchmark_matrix.py --repeats 3 \
+  --only 'MeanRisk[VARIANCE]' \
+  --only 'MeanRisk[SEMI_VARIANCE]' \
+  --only 'MeanRisk[MEAN_ABSOLUTE_DEVIATION]' \
+  --only 'MeanRisk[CVAR]' \
+  --only 'MeanRisk[MAX_DRAWDOWN]'
 ```
 
-On the quick 93-case matrix, 88 cases were solvable by native skfolio. The
-variance aliases used OSQP (six cases, median 22.8×), CVaR used Clarabel
-(three cases, median 13.9×), and the 79 generic fallback cases had median
-1.0× runtime. That is the expected result: generic cases keep skfolio's
-original fitting and solver path exactly. Improving them requires a
-problem-specific kernel or reusable model state, not a wrapper-level cache.
+Use `--native-n-jobs=-1` as a separate parallel timing comparison. The
+correctness baseline remains native `n_jobs=1`. Structured and fallback rows
+are deliberately reported separately.
 
 ## Installation and tests
 
