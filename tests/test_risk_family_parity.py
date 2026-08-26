@@ -14,7 +14,7 @@ from skfolio.model_selection import (
 )
 from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
 from skfolio.optimization import MeanRisk, ObjectiveFunction
-from sklearn.model_selection import KFold, TimeSeriesSplit
+from sklearn.model_selection import BaseCrossValidator, KFold, TimeSeriesSplit
 
 from skfolio_accelerate import cross_val_predict, path_sharpes
 from skfolio_accelerate.compact import estimator_spec, make_compact_engine
@@ -224,12 +224,25 @@ def test_compact_failure_preserves_mutable_randomized_cv_plan(monkeypatch):
     monkeypatch.setattr(
         compact, "make_compact_engine", lambda *args, **kwargs: FailingEngine()
     )
+
+    class MutableRandomizedCV(BaseCrossValidator):
+        shuffle = False
+
+        def __init__(self, seed):
+            self.random_state = np.random.RandomState(seed)
+
+        def get_n_splits(self, X=None, y=None, groups=None):
+            return 3
+
+        def split(self, X, y=None, groups=None):
+            permutation = self.random_state.permutation(len(X))
+            for test in np.array_split(permutation, self.get_n_splits()):
+                test = np.sort(test)
+                train = np.setdiff1d(np.arange(len(X)), test)
+                yield train, test
+
     X = synthetic_returns(96, 6, seed=94)
-    cv = KFold(
-        n_splits=3,
-        shuffle=True,
-        random_state=np.random.RandomState(95),
-    )
+    cv = MutableRandomizedCV(seed=95)
     reference = skfolio_cv_predict(
         MeanRisk(risk_measure=RiskMeasure.CVAR),
         X,
