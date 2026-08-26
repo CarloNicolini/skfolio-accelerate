@@ -170,6 +170,10 @@ PYTHONPATH=src python benchmarks/benchmark_20_year.py
 
 ## Installation and tests
 
+The package targets skfolio 1.x. Its only additional runtime dependency is
+OSQP; NumPy, SciPy, Clarabel, and scikit-learn come from skfolio's own runtime
+stack.
+
 ```bash
 python -m venv .venv
 source .venv/bin/activate
