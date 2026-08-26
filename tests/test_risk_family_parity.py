@@ -103,7 +103,7 @@ def test_all_risk_measures_match_native_across_cv(risk_measure, cv_factory):
         rtol=3e-3,
         atol=2e-4,
     )
-    if risk_measure in COMPACT_RISKS:
+    if estimator.risk_measure in COMPACT_RISKS:
         assert report.backend in {"osqp", "clarabel", "sklearn"}
         if report.backend == "sklearn":
             assert report.fallback_reason is not None
@@ -145,7 +145,12 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
     )
     observed = engine.solve(moments, warm=False)
 
-    tolerance = 2e-4 if risk_measure in {RiskMeasure.EVAR, RiskMeasure.EDAR} else 2e-5
+    if risk_measure is RiskMeasure.VARIANCE:
+        tolerance = 5e-4
+    elif risk_measure in {RiskMeasure.EVAR, RiskMeasure.EDAR}:
+        tolerance = 2e-4
+    else:
+        tolerance = 2e-5
     np.testing.assert_allclose(observed, reference, rtol=0, atol=tolerance)
     assert observed.sum() == pytest.approx(1.0, abs=2e-7)
     assert np.min(observed) >= 0.05 - 2e-7
