@@ -150,13 +150,20 @@ optimizer across WalkForward, purged CPCV, and MultipleRandomizedCV:
 PYTHONPATH=src python benchmarks/benchmark_matrix.py --quick --repeats 3
 ```
 
-On the benchmark VM (Python 3.12, skfolio 1.0.0), the compact cases were
-usually 5–30× faster in the small suite; native fallbacks stayed near 1×.
-One EVaR randomized case could not complete in Clarabel and automatically fell
-back to skfolio. Peak RSS was typically similar to native because importing
-Python and skfolio dominates these small processes.
+On the benchmark VM (Python 3.12, skfolio 1.0.0), compact MeanRisk was
+usually 5–30× faster in the small suite. EqualWeighted, Random, and
+InverseVolatility were 4.5–13.2× because they skip native CV machinery.
+Serial estimators that still call native `fit` (HRP, standard deviation)
+picked up the shared assembly path at 1.2–1.7×. That is the same overhead
+cut as EqualWeighted, not a 5–13× floor: the optimiser still dominates.
+Pipelines and sequential previous weights stay on native skfolio (~1×).
+One EVaR randomized case could not complete in Clarabel and automatically
+retried with native `fit` plus assembly. Peak RSS was typically similar to
+native because importing Python and skfolio dominates these small processes.
 
 ![Quick benchmark speedup ranges](docs/figures/quick-benchmark-speedups.svg)
+
+![EqualWeighted native CV overhead](docs/figures/cv-overhead-breakdown.svg)
 
 The more useful large test contains 5,040 daily returns. Native skfolio used
 `n_jobs=1`; WalkForward made 228 solves and MRC made 480:

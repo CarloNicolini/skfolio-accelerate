@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">EqualWeighted native CV overhead</title>
+  <desc id="desc">Walk-forward EqualWeighted on a 120 by 6 DataFrame. Native time is CV machinery; closed-form assembly is 0.2 ms.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #172033; }
+    .title { font-size: 26px; font-weight: 700; }
+    .subtitle { font-size: 15px; fill: #55627a; }
+    .label { font-size: 16px; font-weight: 600; }
+    .value { font-size: 14px; fill: #33415c; }
+    .axis { font-size: 13px; fill: #66748c; }
+    .note { font-size: 13px; fill: #55627a; }
+  </style>
+  <rect width="1120" height="520" fill="#ffffff"/>
+  <text x="50" y="48" class="title">Where EqualWeighted time goes (4 walk-forward folds)</text>
+  <text x="50" y="74" class="subtitle">Median of seven in-process timings on a 120 x 6 pandas DataFrame. Nested native helpers, not additive slices.</text>
+  <g stroke="#dce3ef" stroke-width="1">
+    <line x1="430" y1="110" x2="1040" y2="110"/>
+    <line x1="430" y1="110" x2="430" y2="400"/>
+    <line x1="633" y1="110" x2="633" y2="400"/>
+    <line x1="837" y1="110" x2="837" y2="400"/>
+    <line x1="1040" y1="110" x2="1040" y2="400"/>
+  </g>
+  <g class="axis">
+    <text x="422" y="98">0 ms</text>
+    <text x="618" y="98">1 ms</text>
+    <text x="822" y="98">2 ms</text>
+    <text x="1020" y="98">3 ms</text>
+  </g>
+  <g>
+    <text x="50" y="148" class="label">Native cross_val_predict</text>
+    <rect x="430" y="128" width="527" height="26" rx="5" fill="#94a3b8"/>
+    <text x="967" y="148" class="value">2.59 ms</text>
+
+    <text x="50" y="198" class="label">joblib Parallel n_jobs=1</text>
+    <rect x="430" y="178" width="500" height="26" rx="5" fill="#64748b"/>
+    <text x="940" y="198" class="value">2.46 ms</text>
+
+    <text x="50" y="248" class="label">clone + fit on DataFrame</text>
+    <rect x="430" y="228" width="315" height="26" rx="5" fill="#c2410c"/>
+    <text x="755" y="248" class="value">1.55 ms</text>
+
+    <text x="50" y="298" class="label">clone + fit on ndarray view</text>
+    <rect x="430" y="278" width="63" height="26" rx="5" fill="#d97706"/>
+    <text x="503" y="298" class="value">0.31 ms</text>
+
+    <text x="50" y="348" class="label">predict() DataFrame slices</text>
+    <rect x="430" y="328" width="165" height="26" rx="5" fill="#7c3aed"/>
+    <text x="605" y="348" class="value">0.81 ms</text>
+
+    <text x="50" y="398" class="label">closed-form + assemble</text>
+    <rect x="430" y="378" width="41" height="26" rx="5" fill="#0891b2"/>
+    <text x="481" y="398" class="value">0.20 ms</text>
+  </g>
+  <line x1="50" y1="430" x2="1070" y2="430" stroke="#dce3ef"/>
+  <text x="50" y="456" class="note">sklearn validate_data on a DataFrame dominates EqualWeighted.fit. Closed-form skips fit. Random is the same once Dirichlet draws replace 1/n weights.</text>
+  <text x="50" y="478" class="note">HRP still has to fit; ndarray views plus assembly cut native 18.6 ms to 10.4 ms (~1.8x), not 13x. Standard-deviation MeanRisk only drops 27.2 ms to 22.6 ms (~1.2x).</text>
+  <text x="50" y="500" class="note">Source: in-process profile on Python 3.12, skfolio 1.0.0; not the isolated benchmark_matrix.py RSS runs.</text>
+</svg>
