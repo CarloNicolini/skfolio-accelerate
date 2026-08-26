@@ -70,6 +70,7 @@ def test_cvxpy_params_match_mean_risk_with_min_return_and_l1():
         )
         engine = make_compact_engine(spec, n_assets=8, n_observations=None)
         assert isinstance(engine, CvxpyParamEngine)
+        assert engine._problem.is_dpp("dcp", quad_form_dpp="qp")
         w = engine.solve(moments, warm=False)
         w_sk = estimator.fit(X).weights_
         np.testing.assert_allclose(w, w_sk, atol=5e-4, rtol=0)

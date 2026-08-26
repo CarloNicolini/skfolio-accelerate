@@ -108,7 +108,7 @@ class CvxpyParamEngine:
             eps_abs=1e-8,
             eps_rel=1e-8,
             max_iter=4000,
-            polish=False,
+            polishing=False,
         )
         if warm and self._solved_once:
             self.n_warm_starts += 1
