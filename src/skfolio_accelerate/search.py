@@ -69,7 +69,9 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
 
     x_arr = as_float_2d(X)
     cv_plan = compile_cv_plan(cv, X, y)
-    keep_returns = any(spec["risk_measure"] is RiskMeasure.CVAR for spec in specs)
+    keep_returns = any(
+        spec["risk_measure"] is not RiskMeasure.VARIANCE for spec in specs
+    )
     fold_blocks = None
     if cv_plan.kind == "cpcv":
         fold_blocks = cpcv_fold_blocks(x_arr.shape[0], int(cv.n_folds))
@@ -87,7 +89,10 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
             # Clarabel has no explicit cold-start reset. Keep OSQP workspaces
             # across MRC paths, but rebuild CVaR engines at path boundaries.
             for candidate_id, spec in enumerate(specs):
-                if spec["risk_measure"] is RiskMeasure.CVAR:
+                if spec["risk_measure"] not in {
+                    RiskMeasure.VARIANCE,
+                    RiskMeasure.SEMI_VARIANCE,
+                }:
                     engines[candidate_id] = EngineCache(spec=spec)
         asset_idx = folds[0].asset_idx if folds else None
         if asset_idx is None:
@@ -112,7 +117,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
             ):
                 observations = (
                     moments.n_observations
-                    if spec["risk_measure"] is RiskMeasure.CVAR
+                    if spec["risk_measure"] is not RiskMeasure.VARIANCE
                     else None
                 )
                 engine = engine_cache.get(int(moments.mu.size), observations)
