@@ -7,6 +7,7 @@ problems and parameters are used unchanged.
 
 from __future__ import annotations
 
+import copy
 import os
 import time
 from collections import defaultdict
@@ -16,7 +17,7 @@ from typing import Any
 import numpy as np
 from skfolio import RiskMeasure
 from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predict
-from skfolio.optimization import MeanRisk
+from skfolio.optimization import EqualWeighted, InverseVolatility, MeanRisk
 from skfolio.optimization.convex import ObjectiveFunction
 from sklearn.base import clone
 from sklearn.pipeline import Pipeline
@@ -34,7 +35,20 @@ _SUPPORTED_OBJECTIVES = {
     ObjectiveFunction.MINIMIZE_RISK,
     ObjectiveFunction.MAXIMIZE_UTILITY,
 }
-_SUPPORTED_RISKS = {RiskMeasure.VARIANCE, RiskMeasure.CVAR}
+_SUPPORTED_RISKS = {
+    RiskMeasure.VARIANCE,
+    RiskMeasure.SEMI_VARIANCE,
+    RiskMeasure.SEMI_DEVIATION,
+    RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+    RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+    RiskMeasure.WORST_REALIZATION,
+    RiskMeasure.CVAR,
+    RiskMeasure.EVAR,
+    RiskMeasure.MAX_DRAWDOWN,
+    RiskMeasure.AVERAGE_DRAWDOWN,
+    RiskMeasure.CDAR,
+    RiskMeasure.EDAR,
+}
 _UNSUPPORTED_IF_SET = (
     ("min_budget", "minimum budget"),
     ("max_budget", "maximum budget"),
@@ -75,6 +89,8 @@ _UNSUPPORTED_IF_SET = (
     ("max_ulcer_index", "maximum ulcer index"),
     ("max_gini_mean_difference", "maximum Gini mean difference"),
     ("solver_params", "custom solver parameters"),
+    ("scale_objective", "custom objective scaling"),
+    ("scale_constraints", "custom constraint scaling"),
     ("portfolio_params", "estimator portfolio parameters"),
     ("fallback", "fallback estimator"),
 )
@@ -131,6 +147,18 @@ def blocked_reason(estimator) -> str | None:
     """Why the compact engine cannot run this estimator, or None if it can."""
     if isinstance(estimator, Pipeline):
         return "pipelines use skfolio cross_val_predict"
+    if type(estimator) in {EqualWeighted, InverseVolatility}:
+        if getattr(estimator, "fallback", None) is not None:
+            return "fallback estimator is not compacted"
+        if getattr(estimator, "previous_weights", None) is not None:
+            return "previous weights are not compacted"
+        if getattr(estimator, "raise_on_failure", True) is not True:
+            return "raise_on_failure=False is not compacted"
+        if getattr(estimator, "portfolio_params", None) is not None:
+            return "estimator portfolio parameters are not compacted"
+        if type(estimator) is InverseVolatility and not is_default_empirical(estimator):
+            return "custom prior is not compacted"
+        return None
     if not isinstance(estimator, MeanRisk):
         return f"estimator {type(estimator).__name__} is not MeanRisk"
     for attr, label in _UNSUPPORTED_IF_SET:
@@ -148,12 +176,20 @@ def blocked_reason(estimator) -> str | None:
     risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
+    solver = getattr(estimator, "solver", "CLARABEL")
+    if risk is RiskMeasure.VARIANCE:
+        if solver not in {"CLARABEL", "OSQP"}:
+            return f"solver {solver!r} is not compacted for {risk.name}"
+    elif solver != "CLARABEL":
+        return f"solver {solver!r} is not compacted for {risk.name}"
     if _nonzero(getattr(estimator, "l1_coef", 0.0)):
         return "l1_coef is not compacted"
     if isinstance(getattr(estimator, "min_weights", 0.0), dict) or isinstance(
         getattr(estimator, "max_weights", 1.0), dict
     ):
         return "dict weight bounds are not compacted"
+    if isinstance(getattr(estimator, "min_acceptable_return", None), dict):
+        return "dict minimum acceptable returns are not compacted"
     if _nonzero(getattr(estimator, "transaction_costs", 0.0)):
         return "transaction costs are not compacted"
     if _nonzero(getattr(estimator, "management_fees", 0.0)):
@@ -162,6 +198,8 @@ def blocked_reason(estimator) -> str | None:
         return "a non-zero risk-free rate is not compacted"
     if getattr(estimator, "raise_on_failure", True) is not True:
         return "raise_on_failure=False is not compacted"
+    if getattr(estimator, "save_problem", False):
+        return "saved CVXPY problem state is not compacted"
     if not is_default_empirical(estimator):
         return "custom prior is not compacted"
     return None
@@ -265,6 +303,46 @@ def _merge_batch_results(parts: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _run_closed_form_batch(
+    X: np.ndarray,
+    folds: list[FoldSpec],
+    estimator,
+    *,
+    fold_blocks: list[np.ndarray] | None,
+) -> dict[str, Any]:
+    first_assets = folds[0].asset_idx if folds else None
+    if first_assets is None:
+        x_work = X
+        blocks = fold_blocks
+    else:
+        x_work = X[:, np.asarray(first_assets, dtype=np.intp)]
+        blocks = None
+    cache = None
+    if type(estimator) is InverseVolatility:
+        cache = OverlapMomentCache(x_work, keep_returns=False, fold_blocks=blocks)
+    weights: dict[int, np.ndarray] = {}
+    moments_s = 0.0
+    for fold in folds:
+        if cache is None:
+            n_assets = x_work.shape[1]
+            weights[fold.fold_id] = np.full(n_assets, 1.0 / n_assets)
+            continue
+        started = time.perf_counter()
+        moments = cache.get(fold, path_key=fold.path_id)
+        moments_s += time.perf_counter() - started
+        inverse_volatility = 1.0 / np.sqrt(np.diag(moments.covariance))
+        weights[fold.fold_id] = inverse_volatility / inverse_volatility.sum()
+    return {
+        "weights": weights,
+        "moments_s": moments_s,
+        "solve_s": 0.0,
+        "n_solves": 0,
+        "n_warm_starts": 0,
+        "n_prior_fits": 0 if cache is None else cache.n_fits,
+        "n_prior_updates": 0 if cache is None else cache.n_updates,
+    }
+
+
 def _skfolio_predict(
     estimator,
     X,
@@ -359,15 +437,48 @@ def cross_val_predict(
         raise ValueError(f"backend={backend!r} cannot compact this predict: {blocked}")
 
     estimator = clone(estimator)
-    spec = estimator_spec(estimator)
-    keep_returns = spec["risk_measure"] is RiskMeasure.CVAR
     x_arr = as_float_2d(X)
+    # A compact numerical failure must retry the exact original split plan.
+    # Some splitters accept mutable RandomState objects and advance them in split().
+    fallback_cv = copy.deepcopy(cv)
     cv_plan = compile_cv_plan(cv, X, y)
     fold_blocks = None
     if cv_plan.kind == "cpcv":
         fold_blocks = cpcv_fold_blocks(x_arr.shape[0], int(cv.n_folds))
 
     batches = _path_groups(cv_plan.folds) if cv_plan.kind == "mrc" else [cv_plan.folds]
+    if type(estimator) in {EqualWeighted, InverseVolatility}:
+        merged = _merge_batch_results(
+            [
+                _run_closed_form_batch(
+                    x_arr,
+                    batch,
+                    estimator,
+                    fold_blocks=fold_blocks,
+                )
+                for batch in batches
+            ]
+        )
+        t_eval = time.perf_counter()
+        pred = assemble_prediction(
+            X,
+            cv_plan,
+            merged["weights"],
+            name=type(estimator).__name__,
+            portfolio_params=portfolio_params,
+        )
+        report = AccelerationReport(
+            backend="closed-form",
+            n_prior_fits=int(merged["n_prior_fits"]),
+            n_prior_updates=int(merged["n_prior_updates"]),
+            moments_s=float(merged["moments_s"]),
+            eval_s=time.perf_counter() - t_eval,
+            wall_s=time.perf_counter() - t_wall,
+        )
+        return (pred, report) if return_report else pred
+
+    spec = estimator_spec(estimator)
+    keep_returns = spec["risk_measure"] is not RiskMeasure.VARIANCE
     # MRC paths have the same number of assets. Reuse one solver topology across
     # paths, while deliberately disabling the first warm start of each path.
     shared_engines = (
@@ -375,19 +486,44 @@ def cross_val_predict(
         if cv_plan.kind == "mrc" and spec["risk_measure"] is RiskMeasure.VARIANCE
         else None
     )
-    merged = _merge_batch_results(
-        [
-            _run_fold_batch(
-                x_arr,
-                batch,
-                spec,
-                keep_returns=keep_returns,
-                fold_blocks=fold_blocks,
-                engines=shared_engines,
-            )
-            for batch in batches
-        ]
-    )
+    try:
+        merged = _merge_batch_results(
+            [
+                _run_fold_batch(
+                    x_arr,
+                    batch,
+                    spec,
+                    keep_returns=keep_returns,
+                    fold_blocks=fold_blocks,
+                    engines=shared_engines,
+                )
+                for batch in batches
+            ]
+        )
+    except (RuntimeError, ValueError) as error:
+        pred = _skfolio_predict(
+            estimator,
+            X,
+            y,
+            fallback_cv,
+            n_jobs=n_jobs,
+            method=method,
+            verbose=verbose,
+            params=params,
+            pre_dispatch=pre_dispatch,
+            column_indices=column_indices,
+            portfolio_params=portfolio_params,
+            entry_rebalancing_params=entry_rebalancing_params,
+        )
+        report = AccelerationReport(
+            backend="sklearn",
+            fallback_reason=(
+                f"compact {spec['risk_measure'].name} solve failed: "
+                f"{type(error).__name__}: {error}"
+            ),
+            wall_s=time.perf_counter() - t_wall,
+        )
+        return (pred, report) if return_report else pred
 
     t_eval = time.perf_counter()
     pred = assemble_prediction(

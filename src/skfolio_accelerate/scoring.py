@@ -54,23 +54,56 @@ def _ranking_inputs(reference, observed) -> tuple[np.ndarray, np.ndarray]:
     return ref, obs
 
 
-def ranking_precision_at_k(reference, observed, *, k: int) -> float:
-    """Fraction of skfolio's top-k portfolios retained in the observed top-k."""
+def ranking_precision_at_k(
+    reference,
+    observed,
+    *,
+    k: int,
+    score_tolerance: float = 0.0,
+) -> float:
+    """Top-k precision, without penalizing swaps tied in the native scores."""
     ref, obs = _ranking_inputs(reference, observed)
     if not 1 <= k <= ref.size:
         raise ValueError(f"k must be between 1 and {ref.size}")
-    ref_top = np.argsort(-ref, kind="stable")[:k]
+    if score_tolerance < 0:
+        raise ValueError("score_tolerance must be non-negative")
+    reference_order = np.argsort(-ref, kind="stable")
+    threshold = ref[reference_order[k - 1]] - score_tolerance
+    ref_top = np.flatnonzero(ref >= threshold)
     obs_top = np.argsort(-obs, kind="stable")[:k]
     return float(np.intersect1d(ref_top, obs_top, assume_unique=True).size / k)
 
 
-def spearman_rank_correlation(reference, observed) -> float:
-    """Spearman correlation between skfolio and observed portfolio scores."""
+def _tolerant_ranks(values: np.ndarray, tolerance: float) -> np.ndarray:
+    if tolerance == 0:
+        return rankdata(values)
+    order = np.argsort(values, kind="stable")
+    ranks = np.empty(values.size, dtype=np.float64)
+    start = 0
+    while start < values.size:
+        stop = start + 1
+        group_min = values[order[start]]
+        while stop < values.size and values[order[stop]] - group_min <= tolerance:
+            stop += 1
+        ranks[order[start:stop]] = 0.5 * (start + 1 + stop)
+        start = stop
+    return ranks
+
+
+def spearman_rank_correlation(
+    reference,
+    observed,
+    *,
+    score_tolerance: float = 0.0,
+) -> float:
+    """Spearman correlation with optional numerical tie grouping."""
     ref, obs = _ranking_inputs(reference, observed)
     if ref.size < 2:
         raise ValueError("at least two portfolios are required")
-    ranked_ref = rankdata(ref)
-    ranked_obs = rankdata(obs)
+    if score_tolerance < 0:
+        raise ValueError("score_tolerance must be non-negative")
+    ranked_ref = _tolerant_ranks(ref, score_tolerance)
+    ranked_obs = _tolerant_ranks(obs, score_tolerance)
     if np.ptp(ranked_ref) == 0 or np.ptp(ranked_obs) == 0:
         return float("nan")
     return float(np.corrcoef(ranked_ref, ranked_obs)[0, 1])
