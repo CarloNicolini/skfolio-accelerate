@@ -63,6 +63,11 @@ costs, turnover, custom priors, uncertainty sets, factor data, pipelines, and
 other optimizers. In those cases skfolio builds and solves its original CVXPY
 problem, so compatibility does not depend on a partial reimplementation here.
 
+This is an intentional correctness boundary, not a general acceleration claim.
+For an arbitrary skfolio estimator, safely caching a fitted prior or solver
+would require knowing which inputs, constraints, and state it owns. Reusing one
+without that knowledge can silently solve a different portfolio problem.
+
 Pass `return_report=True` if you want to see which path was selected:
 
 ```python
@@ -167,6 +172,22 @@ Run the same benchmark with:
 ```bash
 PYTHONPATH=src python benchmarks/benchmark_20_year.py
 ```
+
+`benchmark_coverage.py` measures the broader compatibility surface: every
+`MeanRisk` risk measure and each directly constructible public optimizer across
+WalkForward, purged CPCV, and MultipleRandomizedCV. It reports native failures
+separately rather than attributing them to this package:
+
+```bash
+PYTHONPATH=src python benchmarks/benchmark_coverage.py --quick
+```
+
+On the quick 93-case matrix, 88 cases were solvable by native skfolio. The
+variance aliases used OSQP (six cases, median 22.8×), CVaR used Clarabel
+(three cases, median 13.9×), and the 79 generic fallback cases had median
+1.0× runtime. That is the expected result: generic cases keep skfolio's
+original fitting and solver path exactly. Improving them requires a
+problem-specific kernel or reusable model state, not a wrapper-level cache.
 
 ## Installation and tests
 
