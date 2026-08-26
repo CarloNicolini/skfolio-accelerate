@@ -91,16 +91,7 @@ def test_optimizer_and_cv_matrix_matches_skfolio(cv_factory, estimator_factory):
         pytest.param(_mrc, id="multiple-randomized"),
     ],
 )
-@pytest.mark.parametrize(
-    "estimator_factory",
-    [
-        pytest.param(lambda: MeanRisk(), id="variance"),
-        pytest.param(
-            lambda: MeanRisk(risk_measure=RiskMeasure.CVAR),
-            id="cvar",
-        ),
-    ],
-)
+@pytest.mark.parametrize("estimator_factory", ESTIMATOR_CASES)
 def test_path_ranking_matches_skfolio(cv_factory, estimator_factory):
     X = synthetic_returns(120, 6, seed=32)
     reference = path_sharpes(
@@ -111,7 +102,12 @@ def test_path_ranking_matches_skfolio(cv_factory, estimator_factory):
     )
     k = max(1, reference.size // 2)
     assert ranking_precision_at_k(reference, observed, k=k) == 1.0
-    assert spearman_rank_correlation(reference, observed) >= 0.95
+    correlation = spearman_rank_correlation(reference, observed)
+    if np.ptp(reference) == 0:
+        np.testing.assert_allclose(observed, reference, rtol=1e-12, atol=1e-12)
+        assert np.isnan(correlation)
+    else:
+        assert correlation >= 0.95
 
 
 @pytest.mark.parametrize("cv_factory", CV_CASES)

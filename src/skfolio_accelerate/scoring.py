@@ -71,6 +71,8 @@ def spearman_rank_correlation(reference, observed) -> float:
         raise ValueError("at least two portfolios are required")
     ranked_ref = rankdata(ref)
     ranked_obs = rankdata(obs)
+    if np.ptp(ranked_ref) == 0 or np.ptp(ranked_obs) == 0:
+        return float("nan")
     return float(np.corrcoef(ranked_ref, ranked_obs)[0, 1])
 
 

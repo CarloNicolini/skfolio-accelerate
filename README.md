@@ -75,6 +75,26 @@ prediction, report = cross_val_predict(
 print(report.backend)  # "osqp", "clarabel", or "sklearn"
 ```
 
+## Checking portfolio rankings
+
+Numerical closeness does not guarantee that portfolio selection is unchanged.
+The package therefore exposes two small comparison helpers. Treat skfolio's
+native scores as the reference:
+
+```python
+from skfolio_accelerate import (
+    ranking_precision_at_k,
+    spearman_rank_correlation,
+)
+
+precision = ranking_precision_at_k(reference_scores, accelerated_scores, k=5)
+correlation = spearman_rank_correlation(reference_scores, accelerated_scores)
+```
+
+Precision@k measures how much of skfolio's top-k set is retained. Spearman
+correlation compares the complete ordering. Spearman is `nan` when either set
+is constant because no ranking exists.
+
 ## Parameter search
 
 `grid_search` is intended for large grids that stay inside the compact
@@ -114,29 +134,33 @@ for 19,200 optimizations in total.
 
 | 20-year randomized backtest | Time |
 |---|---:|
-| skfolio `cross_val_predict(n_jobs=-1)` | 49.78 s |
-| `skfolio_accelerate.cross_val_predict` | 3.69 s |
-| Speedup | **13.5×** |
+| skfolio `cross_val_predict(n_jobs=-1)` | 50.23 s |
+| `skfolio_accelerate.cross_val_predict` | 3.81 s |
+| Speedup | **13.2×** |
 
 The largest absolute difference between the 200 path Sharpe ratios was
-`1.56e-4`.
+`1.56e-4`. Path ranking precision@20 was `1.000`, with Spearman correlation
+`0.999965`.
 
 On the same data, a 10-fold CPCV run with two test folds, a five-day purge,
-and a five-day embargo took 0.06 seconds instead of 0.50 seconds (8.4×).
+and a five-day embargo took 0.06 seconds instead of 0.50 seconds (7.9×).
 Only the ten base fold moments were fitted; all 45 train combinations were
-assembled from them. The largest path Sharpe difference was `4.16e-5`.
+assembled from them. The largest path Sharpe difference was `4.16e-5`, and
+Spearman correlation was `0.983333`. Precision@3 was `0.667`: one path crossed
+the third-place boundary, while the top two and top four sets were unchanged.
 
 The final test searches 16 `l2_coef` values on 100 assets with monthly
 WalkForward CV.
 
 | 20-year parameter search | Time |
 |---|---:|
-| Repeated skfolio CV | 16.30 s |
-| Shared-moment `grid_search` | 1.74 s |
+| Repeated skfolio CV | 16.34 s |
+| Shared-moment `grid_search` | 1.75 s |
 | Speedup | **9.4×** |
 
 The largest candidate Sharpe difference was `1.89e-4`. These small differences
-come from the direct OSQP solve and are covered by the numerical parity tests.
+come from the direct OSQP solve. Candidate precision@5 was `1.000`, with
+Spearman correlation `0.991176`.
 
 Run the same benchmark with:
 
