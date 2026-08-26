@@ -114,26 +114,26 @@ for 19,200 optimizations in total.
 
 | 20-year randomized backtest | Time |
 |---|---:|
-| skfolio `cross_val_predict(n_jobs=-1)` | 49.85 s |
-| `skfolio_accelerate.cross_val_predict` | 3.58 s |
-| Speedup | **13.9×** |
+| skfolio `cross_val_predict(n_jobs=-1)` | 49.78 s |
+| `skfolio_accelerate.cross_val_predict` | 3.69 s |
+| Speedup | **13.5×** |
 
 The largest absolute difference between the 200 path Sharpe ratios was
 `1.56e-4`.
 
 On the same data, a 10-fold CPCV run with two test folds, a five-day purge,
-and a five-day embargo took 0.26 seconds instead of 2.45 seconds (9.4×).
+and a five-day embargo took 0.06 seconds instead of 0.50 seconds (8.4×).
 Only the ten base fold moments were fitted; all 45 train combinations were
-assembled from them. The largest path Sharpe difference was `5.42e-5`.
+assembled from them. The largest path Sharpe difference was `4.16e-5`.
 
 The final test searches 16 `l2_coef` values on 100 assets with monthly
 WalkForward CV.
 
 | 20-year parameter search | Time |
 |---|---:|
-| Repeated skfolio CV | 16.28 s |
-| Shared-moment `grid_search` | 1.76 s |
-| Speedup | **9.3×** |
+| Repeated skfolio CV | 16.30 s |
+| Shared-moment `grid_search` | 1.74 s |
+| Speedup | **9.4×** |
 
 The largest candidate Sharpe difference was `1.89e-4`. These small differences
 come from the direct OSQP solve and are covered by the numerical parity tests.
