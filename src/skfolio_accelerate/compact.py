@@ -646,6 +646,48 @@ class ScenarioClarabel:
             cones,
         )
 
+    def _semi_variance_problem(
+        self, moments: FoldMoments
+    ) -> tuple[
+        sp.csc_matrix,
+        NDArray[np.float64],
+        sp.csc_matrix,
+        NDArray[np.float64],
+        list[Any],
+    ]:
+        deviations = _scenario_deviations(moments, self.spec["min_acceptable_return"])
+        t, n = deviations.shape
+        nv = n + t
+        q = np.zeros(nv, dtype=np.float64)
+        self._weight_objective(q, moments)
+        zero, zero_b, nonneg, nonneg_b = self._weight_rows()
+        for k in range(t):
+            nonneg.append([(n + k, -1.0)])
+            nonneg_b.append(0.0)
+            nonneg.append(
+                [(j, -float(deviations[k, j])) for j in range(n)] + [(n + k, -1.0)]
+            )
+            nonneg_b.append(0.0)
+
+        diagonal = np.concatenate(
+            [
+                np.full(n, 2.0 * self.l2),
+                np.full(t, 2.0 * self._risk_scale() / (t - 1)),
+            ]
+        )
+        rows = zero + nonneg
+        cones: list[Any] = [
+            clarabel.ZeroConeT(len(zero)),
+            clarabel.NonnegativeConeT(len(nonneg)),
+        ]
+        return (
+            sp.diags(diagonal, format="csc"),
+            q,
+            _rows_to_csc(rows, nv),
+            np.asarray(zero_b + nonneg_b, dtype=np.float64),
+            cones,
+        )
+
     def _exponential_problem(
         self, moments: FoldMoments, *, drawdown: bool
     ) -> tuple[
@@ -717,6 +759,8 @@ class ScenarioClarabel:
 
     def _problem(self, moments: FoldMoments):
         risk = self.spec["risk_measure"]
+        if risk is RiskMeasure.SEMI_VARIANCE:
+            return self._semi_variance_problem(moments)
         if risk is RiskMeasure.SEMI_DEVIATION:
             return self._semi_deviation_problem(moments)
         if risk is RiskMeasure.EVAR:
@@ -879,7 +923,7 @@ def make_compact_engine(
     if risk is RiskMeasure.SEMI_VARIANCE:
         if n_observations is None:
             raise ValueError("semi-variance engine requires n_observations")
-        return SemiVarianceOSQP(spec, n_assets, n_observations)
+        return ScenarioClarabel(spec, n_assets, n_observations)
     if risk in {
         RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
         RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,

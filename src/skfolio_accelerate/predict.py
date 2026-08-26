@@ -176,7 +176,7 @@ def blocked_reason(estimator) -> str | None:
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
     solver = getattr(estimator, "solver", "CLARABEL")
-    if risk in {RiskMeasure.VARIANCE, RiskMeasure.SEMI_VARIANCE}:
+    if risk is RiskMeasure.VARIANCE:
         if solver not in {"CLARABEL", "OSQP"}:
             return f"solver {solver!r} is not compacted for {risk.name}"
     elif solver != "CLARABEL":
@@ -531,9 +531,7 @@ def cross_val_predict(
     )
     eval_s = time.perf_counter() - t_eval
     backend_name = (
-        "osqp"
-        if spec["risk_measure"] in {RiskMeasure.VARIANCE, RiskMeasure.SEMI_VARIANCE}
-        else "clarabel"
+        "osqp" if spec["risk_measure"] is RiskMeasure.VARIANCE else "clarabel"
     )
     report = AccelerationReport(
         backend=backend_name,

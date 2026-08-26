@@ -89,10 +89,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
             # Clarabel has no explicit cold-start reset. Keep OSQP workspaces
             # across MRC paths, but rebuild CVaR engines at path boundaries.
             for candidate_id, spec in enumerate(specs):
-                if spec["risk_measure"] not in {
-                    RiskMeasure.VARIANCE,
-                    RiskMeasure.SEMI_VARIANCE,
-                }:
+                if spec["risk_measure"] is not RiskMeasure.VARIANCE:
                     engines[candidate_id] = EngineCache(spec=spec)
         asset_idx = folds[0].asset_idx if folds else None
         if asset_idx is None:
