@@ -251,6 +251,8 @@ def main() -> None:
 
                 warm_t0 = time.perf_counter()
                 _cosmo_runtime().warmup()
+                # The 1-variable JIT warmup does not compile this topology.
+                _solve_folds(spec, x_arr, plan, warm=False)
                 warmup_s = time.perf_counter() - warm_t0
                 print(f"cosmo warmup {warmup_s:.4f}s (excluded from fold times)")
             warm = _solve_folds(spec, x_arr, plan, warm=True)
