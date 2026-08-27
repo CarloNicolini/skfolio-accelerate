@@ -1,0 +1,806 @@
+Yes. I think that is actually the cleaner architectural direction—but I would change one important detail: I would not make OnlineSolver merely “an OCO solver.” I would make it a stateful sequential convex optimization runtime, with OCO algorithms as one class of algorithms implemented on top of it.
+
+I checked your universal_portfolio branch. It now places online portfolio selection directly inside skfolio, with FollowTheWinner/EG and the other OLPS strategies exposed through the estimator API and partial_fit; the branch therefore already gives you a useful Python-level specification of the online state machine.  The mainline skfolio architecture meanwhile has MeanRisk as a very broad CVXPY-based convex estimator, including constraints, transaction costs, regularization, tracking error, uncertainty sets and many risk measures. 
+
+The separation I would make is:
+
+\boxed{
+\texttt{skfolio}
+\;\;=\;\;
+\text{portfolio semantics / estimators}
+}
+
+\boxed{
+\texttt{OnlineSolver}
+\;\;=\;\;
+\text{sequential convex numerical engine}
+}
+
+rather than putting a large C implementation inside skfolio-accelerate.
+
+The architectural insight
+
+Today the stack is approximately
+
+\text{skfolio}
+\rightarrow
+\text{CVXPY}
+\rightarrow
+\text{OSQP/Clarabel}
+\rightarrow
+\text{linear algebra}.
+
+Your accelerated WalkForward work is exploiting an important property:
+
+P_{t+1}\approx P_t.
+
+The solver should therefore not see
+
+P_1,P_2,\ldots,P_T
+
+as independent programs.
+
+It should see
+
+P(\theta_1)
+\rightarrow
+P(\theta_2)
+\rightarrow
+\cdots
+\rightarrow
+P(\theta_T)
+
+as a trajectory through a family of related convex programs.
+
+That is a sufficiently general abstraction to deserve a standalone numerical library.
+
+⸻
+
+1. OnlineSolver should not mean “EG solver”
+
+I would avoid an API whose conceptual model is
+
+cp.OnlineSolver(...)
+
+meaning “some particular online algorithm.”
+
+Instead, think:
+
+solver = cp.OnlineSolver(
+    algorithm="admm",
+    ...
+)
+
+or
+
+solver = cp.OnlineSolver(
+    algorithm="mirror_prox",
+    ...
+)
+
+or
+
+solver = cp.OnlineSolver(
+    algorithm="ftrl",
+    ...
+)
+
+with the fundamental object being persistent state.
+
+For example:
+
+state = solver.initialize(problem)
+for observation in stream:
+    state = solver.step(
+        state,
+        parameters=observation,
+    )
+    w = state.primal
+
+The crucial thing is that
+
+state
+
+is not just w.
+
+It could contain
+
+s_t =
+(
+x_t,
+z_t,
+y_t,
+u_t,
+H_t,
+L_t,
+\rho_t,
+\text{active set},
+\text{statistics},
+\ldots).
+
+That is where your idea becomes much more interesting than a conventional CVXPY solver.
+
+⸻
+
+2. MeanRisk becomes the perfect client of this abstraction
+
+Consider a MeanRisk problem:
+
+w_t
+=
+\arg\min_{w}
+f(w;\mu_t,\Sigma_t,\mathcal S_t)
+
+subject to
+
+w\in K.
+
+The important observation is that in WalkForward:
+
+K_t=K
+
+very often remains unchanged, while
+
+(\mu_t,\Sigma_t,\mathcal S_t)
+
+change slowly.
+
+For example:
+
+\Sigma_{t+1}
+=
+\Sigma_t
++
+\text{rank-one update}
+-
+\text{rank-one downdate}
+
+for a rolling covariance window.
+
+Therefore the sequence isn’t:
+
+\boxed{T\text{ optimization problems}}
+
+but rather:
+
+\boxed{
+\text{one optimization problem}
++
+\text{a stream of parameter/data updates}.
+}
+
+That is exactly the abstraction a stateful solver should consume.
+
+⸻
+
+3. This gives you three radically different execution modes
+
+You could make these first-class.
+
+Static
+
+problem.solve()
+
+Compute one optimum.
+
+Mathematically:
+
+w^\star=\arg\min_w f(w;\theta).
+
+Sequential / continuation
+
+solver = cp.OnlineSolver(problem)
+for theta_t in theta_stream:
+    w_t = solver.solve_next(theta_t)
+
+Mathematically:
+
+w_t^\star
+=
+\arg\min_w f(w;\theta_t),
+
+but the numerical algorithm carries information from t-1.
+
+This is what skfolio-accelerate is already moving toward.
+
+Online learning
+
+solver = cp.OnlineSolver(
+    problem,
+    algorithm="omd",
+)
+for loss_t in loss_stream:
+    solver.observe(loss_t)
+    w_t = solver.step()
+
+Now the solver isn’t merely tracking the optimum of a changing empirical problem. It implements an OCO algorithm.
+
+Thus:
+
+\boxed{
+\text{continuation}
+\subset
+\text{sequential convex optimization}
+}
+
+and OCO is another important regime of the same numerical infrastructure.
+
+⸻
+
+4. The critical distinction: objective evolution vs solver evolution
+
+This is the point I would make central to the design.
+
+Suppose:
+
+P_t:
+\quad
+\min_x f_t(x)
+\quad
+\text{s.t. }Ax=b,\;x\in K.
+
+There are two kinds of evolution.
+
+Problem state
+
+f_t,\quad A_t,\quad b_t,\quad K_t.
+
+Algorithm state
+
+x_t,\quad z_t,\quad y_t,\quad
+\text{factorizations},\quad
+\text{preconditioners},\ldots
+
+A conventional solver mostly throws away the second after obtaining x_t.
+
+Your proposed solver would explicitly preserve it:
+
+\boxed{
+(P_t,S_t)
+\longrightarrow
+(P_{t+1},S_{t+1}).
+}
+
+This is the key abstraction.
+
+And it is exactly why I would put this into a standalone C library rather than bury it in skfolio.
+
+⸻
+
+5. ADMM becomes particularly natural
+
+Suppose MeanRisk canonicalizes into
+
+\min_{x,z}
+f_t(x)+g(z)
+
+with
+
+Ax+Bz=c.
+
+Then retain
+
+(x_t,z_t,u_t)
+
+between consecutive problems.
+
+For the next problem:
+
+(x_t,z_t,u_t)
+\rightarrow
+(x_{t+1},z_{t+1},u_{t+1}).
+
+You don’t start ADMM again.
+
+You are tracking the solution manifold.
+
+For a slowly changing covariance matrix, you can potentially retain much more:
+
+K_t=A^\top A+\rho I,
+
+and if only numerical coefficients change, update or reuse the relevant factorization rather than reconstructing everything.
+
+That is a much stronger optimization than simply saying warm_start=True.
+
+⸻
+
+6. And this is where the universal-portfolio branch becomes surprisingly important
+
+Your universal_portfolio branch gives you the algorithmic semantics of an online portfolio.
+
+For example, EG is essentially:
+
+w_{t+1}
+=
+\arg\min_{w\in\Delta}
+\left[
+\eta\langle g_t,w\rangle
++
+D_{\mathrm{KL}}(w\|w_t)
+\right].
+
+The algorithm therefore has a very small state:
+
+S_t=w_t.
+
+A more sophisticated constrained online method could instead have
+
+S_t=(w_t,y_t,z_t,u_t).
+
+So your OLPS implementation isn’t the destination.
+
+It is a proof that skfolio has a second computational regime:
+
+\text{fit once}
+\quad\text{vs}\quad
+\text{learn continuously}.
+
+The standalone solver would provide the numerical substrate for both.
+
+⸻
+
+7. I would actually introduce a more general concept than OnlineSolver
+
+There is a naming question here.
+
+OnlineSolver sounds like:
+
+“This solver implements online learning.”
+
+But the more interesting capability is:
+
+“This solver exploits a sequence of related convex programs.”
+
+I would therefore consider an internal abstraction such as
+
+\texttt{SequentialSolver}
+
+or
+
+\texttt{StatefulSolver}.
+
+Then:
+
+SequentialSolver
+│
+├── ExactContinuation
+│
+├── WarmStartedADMM
+│
+├── OnlineMirrorDescent
+│
+├── FTRL
+│
+├── Online Newton
+│
+└── PrimalDualOCO
+
+You could still expose
+
+cp.OnlineSolver(...)
+
+as a convenient public name if you want the OCO story.
+
+But internally the abstraction should be broader.
+
+⸻
+
+8. Why making it a C library is compelling
+
+There is a strong reason to keep the numerical layer independent from skfolio.
+
+skfolio is a Python/scikit-learn semantic framework. Its job is to define things such as:
+
+\text{MeanRisk}
+
+and
+
+\text{CVaR},\text{CDaR},\text{variance},\text{turnover},\ldots
+
+The solver should instead see canonical convex objects.
+
+Something like:
+
+OnlineConvexProblem
+    variables
+    objective
+    equalities
+    inequalities
+    cones
+    parameters
+
+plus
+
+SolverState
+    primal
+    dual
+    auxiliary
+    factorization
+    algorithm_state
+
+Then the C library doesn’t know what a portfolio is.
+
+It knows what a convex program is.
+
+That immediately makes the technology useful outside skfolio:
+
+* time-series optimization;
+* MPC;
+* signal processing;
+* resource allocation;
+* sparse regression;
+* robotics;
+* dynamic estimation;
+* online learning;
+* portfolio construction.
+
+This substantially improves the standalone project’s value.
+
+⸻
+
+9. CVXPY is actually a very good frontend
+
+This part is technically plausible.
+
+CVXPY already supports custom solver interfaces. Its current documentation explicitly allows implementing a solver derived from QpSolver or ConicSolver, and CVXPY passes canonicalized numerical problem data to that interface. 
+
+It also exposes canonicalized problem data through get_problem_data(), which can be passed directly to a solver. 
+
+So conceptually:
+
+x = cp.Variable(n)
+Sigma = cp.Parameter((n, n), PSD=True)
+mu = cp.Parameter(n)
+problem = cp.Problem(
+    cp.Minimize(
+        cp.quad_form(x, Sigma) - mu @ x
+    ),
+    constraints=[
+        cp.sum(x) == 1,
+        x >= 0,
+    ],
+)
+solver = cp.OnlineSolver(...)
+problem.solve(solver=solver)
+
+is compatible with the extension mechanism.
+
+But there is an important caveat:
+
+CVXPY’s normal .solve() abstraction is fundamentally a one-shot solve interface. Its custom solver mechanism is designed around giving a solver canonical problem data and receiving a solution. 
+
+Therefore I would not force the entire online semantics into:
+
+problem.solve(solver=cp.OnlineSolver)
+
+alone.
+
+⸻
+
+10. I would add a stateful API alongside the conventional CVXPY API
+
+Something like:
+
+compiled = cp.compile(
+    problem,
+    solver=cp.ONLINE_SOLVER,
+)
+state = compiled.initialize()
+for t in range(T):
+    compiled.update_parameters(theta[t])
+    result = compiled.step(state)
+    state = result.state
+
+or even:
+
+online = cp.OnlineSolver(problem)
+with online.session() as session:
+    for observation in stream:
+        result = session.step(observation)
+
+This avoids pretending that an online solver is just another call to a stateless solve().
+
+And it becomes extraordinarily useful for skfolio:
+
+solver = OnlineSolver.compile(mean_risk_problem)
+for window in walk_forward_windows:
+    solver.update(
+        mu=mu_t,
+        covariance=Sigma_t,
+    )
+    weights = solver.step()
+
+That could sit underneath WalkForward transparently.
+
+⸻
+
+11. Then skfolio-accelerate changes role
+
+This is where I think your projects could fit together elegantly.
+
+Instead of having:
+
+skfolio
+  └── special acceleration code
+       ├── OSQP tricks
+       ├── Clarabel tricks
+       └── WalkForward tricks
+
+you could have:
+
+                  skfolio
+                     │
+        ┌────────────┴────────────┐
+        │                         │
+   classical CVXPY          online/streaming
+        │                         │
+        ▼                         ▼
+   CVXPY solvers            OnlineSolver
+                                  │
+                       ┌──────────┼──────────┐
+                       │          │          │
+                     ADMM        OMD       FTRL
+                       │          │          │
+                       └──────────┼──────────┘
+                                  ▼
+                         C numerical kernel
+
+and
+
+skfolio-accelerate
+
+could then become either:
+
+1. the first application/integration layer for that numerical kernel, or
+2. a benchmarking/research repository containing specialized sequential portfolio workloads.
+
+That separation would be cleaner.
+
+⸻
+
+12. The real killer feature would be solver-state persistence
+
+Imagine a 10,000-asset MeanRisk problem.
+
+At t:
+
+P_t
+\rightarrow
+S_t.
+
+At t+1, rather than starting from zero:
+
+P_{t+1},S_t
+\rightarrow
+S_{t+1}.
+
+And suppose the solver stores:
+
+S_t=
+\left(
+w_t,
+y_t,
+u_t,
+L_t,
+\rho_t,
+\mathcal A_t
+\right)
+
+where L_t is a factorization and \mathcal A_t an active-set prediction.
+
+Then a daily optimization isn’t:
+
+\text{compile}
++
+\text{factorize}
++
+\text{iterate}.
+
+It could become approximately:
+
+\boxed{
+\text{update coefficients}
++
+\text{cheap numerical corrections}
++
+\text{few iterations}.
+}
+
+This is potentially a much larger improvement than simply switching Python/C boundaries.
+
+⸻
+
+13. There is an especially nice relation to MeanRisk’s statistical estimators
+
+Suppose you have:
+
+\Sigma_t
+=
+\operatorname{EWM}(\{r_\tau\}_{\tau\leq t})
+
+or a rolling/shrunk estimator.
+
+Then you can update
+
+\Sigma_{t+1}
+=
+\mathcal U(\Sigma_t,r_{t+1})
+
+without rebuilding it.
+
+Now:
+
+\Sigma_t
+\rightarrow
+P_t
+\rightarrow
+S_t.
+
+You have an entire pipeline of state transformations:
+
+\boxed{
+r_t
+\rightarrow
+\text{statistics}_t
+\rightarrow
+\text{convex problem}_t
+\rightarrow
+\text{solver state}_t
+\rightarrow
+w_t.
+}
+
+This is much closer to a streaming computational graph than conventional machine-learning fit() semantics.
+
+And your universal_portfolio branch is essentially the extreme case where the statistical/problem machinery collapses to an online loss gradient and a small state. 
+
+⸻
+
+14. One thing I would explicitly avoid
+
+I would not make this:
+
+cp.OnlineSolver(
+    MeanRisk(...)
+)
+
+where the C library has to understand MeanRisk.
+
+That creates the wrong dependency direction.
+
+Instead:
+
+MeanRisk
+   ↓
+CVXPY canonicalization
+   ↓
+canonical QP / cone representation
+   ↓
+OnlineSolver C ABI
+
+The C solver knows nothing about MeanRisk.
+
+Then you can feed it:
+
+(Q,p,A,b,K)
+
+for a QP, or
+
+(A,b,c,\mathcal K)
+
+for a conic program.
+
+That makes the architecture extensible to exactly the range you were discussing earlier:
+
+\boxed{
+LP,\;QP,\;SOCP,\;SDP,\;\text{exponential cone},\ldots
+}
+
+without creating a portfolio-specific solver.
+
+⸻
+
+15. The most powerful API may actually be this
+
+I would define the conceptual primitive as:
+
+\boxed{
+\operatorname{step}
+(P_t,S_t)
+\rightarrow
+(x_t,S_{t+1})
+}
+
+with two fundamentally different policies.
+
+Optimization tracking
+
+x_t\approx\arg\min P_t.
+
+Online learning
+
+x_t
+=
+\mathcal A(P_t,S_t,\ell_t).
+
+The first gives you your accelerated WalkForward.
+
+The second gives you EG/OMD/FTRL.
+
+Same numerical state machine, different update semantics.
+
+That is a very clean theoretical unification.
+
+⸻
+
+16. And it gives you a genuinely compelling story
+
+I would position the standalone project approximately as:
+
+A stateful convex optimization engine for sequential and online problems.
+
+Traditional convex optimization treats each problem instance independently. In many real workloads, however, optimization problems arrive as a stream and successive instances differ only slightly. This library exploits temporal structure through persistent primal-dual state, warm starts, factorization reuse, continuation, and online optimization algorithms.
+
+Then the examples become extremely compelling:
+
+# classical
+problem.solve()
+# sequential
+solver.solve_sequence(parameters)
+# online
+solver.online(loss_stream)
+# portfolio
+MeanRisk(..., solver="ONLINE")
+# OCO
+FollowTheWinner(strategy="eg", solver="ONLINE")
+
+And the conceptual diagram is:
+
+\boxed{
+\begin{array}{ccccc}
+\text{batch} &
+\longrightarrow &
+\text{warm-started} &
+\longrightarrow &
+\text{continuation}
+\\
+&&&&\downarrow\\
+&&&&
+\text{online convex optimization}
+\end{array}}
+
+with the same C numerical state underneath.
+
+My recommendation
+
+I would seriously pursue this as a standalone library rather than making skfolio-accelerate progressively more complicated.
+
+The projects then acquire very clean responsibilities:
+
+\boxed{
+\begin{array}{lll}
+\textbf{skfolio} &
+:&
+\text{high-level portfolio modeling + sklearn semantics}\\[2mm]
+\textbf{skfolio universal\_portfolio} &
+:&
+\text{reference implementations of OLPS policies}\\[2mm]
+\textbf{skfolio-accelerate} &
+:&
+\text{portfolio-specific accelerated execution}\\[2mm]
+\textbf{OnlineSolver} &
+:&
+\text{general stateful sequential convex numerical engine}.
+\end{array}}
+
+The last one could eventually become the genuinely novel piece.
+
+And I would go one step further: do not initially optimize for “online portfolio selection.” Optimize for “repeated convex optimization where consecutive problems are correlated.” Portfolio optimization is the killer application because MeanRisk and WalkForward make the phenomenon exceptionally visible, while EG/OLPS supplies the clean theoretical endpoint.
+
+That gives you a much more interesting research/programming thesis:
+
+\boxed{
+\textbf{From solving convex programs to tracking convex programs.}
+}
+
+That is the conceptual leap I see in the combination of your universal_portfolio branch and skfolio-accelerate.
