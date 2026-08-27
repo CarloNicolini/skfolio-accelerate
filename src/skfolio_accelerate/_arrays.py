@@ -11,7 +11,19 @@ from numpy.typing import NDArray
 
 
 def as_float_array(data) -> NDArray[np.float64]:
-    """Return a C-contiguous float64 ndarray, copying only when needed."""
+    """Return a C-contiguous float64 ndarray, copying only when needed.
+
+    Parameters
+    ----------
+    data : array-like or DataFrame
+        Input data. Objects exposing ``to_numpy`` (for example pandas frames)
+        are converted without an intermediate copy when possible.
+
+    Returns
+    -------
+    array : ndarray
+        C-contiguous ``float64`` view or copy.
+    """
     arr = data.to_numpy(copy=False) if hasattr(data, "to_numpy") else np.asarray(data)
     if arr.dtype == np.float64 and arr.flags.c_contiguous:
         return arr
@@ -19,7 +31,18 @@ def as_float_array(data) -> NDArray[np.float64]:
 
 
 def as_float_2d(X) -> NDArray[np.float64]:
-    """Return returns as a contiguous float64 ndarray (usually 2-D)."""
+    """Return returns as a contiguous float64 ndarray (usually 2-D).
+
+    Parameters
+    ----------
+    X : array-like of shape (n_observations, n_assets)
+        Asset returns.
+
+    Returns
+    -------
+    array : ndarray
+        Contiguous ``float64`` array suitable for moment and solver code.
+    """
     return as_float_array(X)
 
 
@@ -29,6 +52,16 @@ def contiguous_row_slice(rows: NDArray[np.intp]) -> slice | None:
     The check is O(1): length, endpoints, and one interior sample. CV indices from
     WalkForward, TimeSeriesSplit, and CPCV fold blocks satisfy this. Fancy-indexed
     KFold / MRC rows fall through to integer indexing.
+
+    Parameters
+    ----------
+    rows : ndarray of shape (n_rows,)
+        Observation indices.
+
+    Returns
+    -------
+    bounds : slice or None
+        ``slice(start, stop)`` when contiguous, else ``None``.
     """
     if rows.ndim != 1 or rows.size == 0:
         return None

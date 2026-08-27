@@ -64,11 +64,31 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package and docs dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[docs]"
+      - name: Build HTML documentation (fast)
+        working-directory: docs
+        env:
+          SKFOLIO_ACCELERATE_DOCS_FAST: "1"
+        run: sphinx-build -b html -W --keep-going . _build/html
+
   package:
     name: Build and inspect package
     needs:
       - quality
       - tests
+      - docs
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7

@@ -181,18 +181,43 @@ class MeanRiskSpec:
     budget: float
 
     def needs_returns(self) -> bool:
+        """``True`` when the risk measure consumes scenario returns."""
         return self.risk_measure is not RiskMeasure.VARIANCE
 
 
 class CompactEngine(Protocol):
+    """Protocol for OSQP / Clarabel engines that solve one fold from moments."""
+
     n_warm_starts: int
 
-    def solve(
-        self, moments: FoldMoments, *, warm: bool = True
-    ) -> NDArray[np.float64]: ...
+    def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
+        """Return portfolio weights for ``moments``.
+
+        Parameters
+        ----------
+        moments : FoldMoments
+            Empirical mean, covariance, and optional scenario returns.
+
+        warm : bool, default=True
+            When ``True``, reuse the previous primal/dual iterate if available.
+        """
+        ...
 
 
 def estimator_spec(estimator) -> MeanRiskSpec:
+    """Extract a :class:`MeanRiskSpec` from a compact-eligible MeanRisk estimator.
+
+    Parameters
+    ----------
+    estimator : MeanRisk
+        Estimator already accepted by
+        :func:`~skfolio_accelerate.predict.blocked_reason`.
+
+    Returns
+    -------
+    spec : MeanRiskSpec
+        Frozen numeric configuration consumed by the compact engines.
+    """
     return MeanRiskSpec(
         risk_measure=getattr(estimator, "risk_measure", RiskMeasure.VARIANCE),
         objective=getattr(
@@ -257,6 +282,30 @@ class MinVarianceOSQP:
         )
 
     def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
+        """Solve the mean-variance QP for one training window.
+
+        Parameters
+        ----------
+        moments : FoldMoments
+            Must provide ``covariance`` of shape ``(n_assets, n_assets)`` and,
+            for maximize-utility, ``mu``.
+
+        warm : bool, default=True
+            Reuse the previous OSQP iterate when ``True``.
+
+        Returns
+        -------
+        weights : ndarray of shape (n_assets,)
+            Optimal portfolio weights.
+
+        Raises
+        ------
+        ValueError
+            If the covariance shape does not match ``n_assets``.
+
+        RuntimeError
+            If OSQP fails even after a small diagonal jitter retry.
+        """
         n = self.n_assets
         cov = np.asarray(moments.covariance, dtype=np.float64)
         if cov.shape != (n, n):
@@ -870,6 +919,32 @@ class ScenarioClarabel:
 def make_compact_engine(
     spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None
 ) -> CompactEngine:
+    """Construct the OSQP or Clarabel engine for ``spec``.
+
+    Parameters
+    ----------
+    spec : MeanRiskSpec
+        Compact MeanRisk configuration.
+
+    n_assets : int
+        Number of decision variables (assets in the working universe).
+
+    n_observations : int or None
+        Training window length. Required for scenario risks; ignored for
+        variance.
+
+    Returns
+    -------
+    engine : CompactEngine
+        :class:`MinVarianceOSQP`, :class:`CVaRClarabel`, or
+        :class:`ScenarioClarabel`.
+
+    Raises
+    ------
+    ValueError
+        If the risk measure is unsupported or ``n_observations`` is missing for
+        a scenario risk.
+    """
     risk = spec.risk_measure
     if risk is RiskMeasure.VARIANCE:
         return MinVarianceOSQP(spec, n_assets)
@@ -884,7 +959,22 @@ def make_compact_engine(
 
 @dataclass
 class EngineCache:
-    """Reuse one compact engine while (n_assets, T) stay constant."""
+    """Reuse one compact engine while ``(n_assets, T)`` stay constant.
+
+    Attributes
+    ----------
+    spec : MeanRiskSpec
+        Problem configuration.
+
+    engine : CompactEngine or None
+        Cached solver instance.
+
+    n_assets : int
+        Asset dimension of ``engine``, or ``-1`` before the first build.
+
+    n_observations : int or None
+        Scenario length of ``engine`` when applicable.
+    """
 
     spec: MeanRiskSpec
     engine: CompactEngine | None = None
@@ -892,6 +982,21 @@ class EngineCache:
     n_observations: int | None = None
 
     def get(self, n_assets: int, n_observations: int | None) -> CompactEngine:
+        """Return a compatible engine, rebuilding when the topology changes.
+
+        Parameters
+        ----------
+        n_assets : int
+            Required number of assets.
+
+        n_observations : int or None
+            Required training length for scenario risks.
+
+        Returns
+        -------
+        engine : CompactEngine
+            Existing or newly constructed solver.
+        """
         need_new = self.engine is None or n_assets != self.n_assets
         if self.spec.needs_returns():
             need_new = need_new or n_observations != self.n_observations

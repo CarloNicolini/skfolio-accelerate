@@ -1,0 +1,9 @@
+{% extends "!layout.html" %}
+
+{% block htmltitle %}
+  {%- if title -%}
+    {{ title | striptags }} - {{ project | e }}
+  {%- else -%}
+    {{ project | e }}
+  {%- endif -%}
+{% endblock %}

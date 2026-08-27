@@ -204,6 +204,19 @@ Use `--native-n-jobs=-1` separately when comparing parallel throughput. Native
 fallback rows separate and includes timing spread, peak RSS, numerical
 difference, rankings, solver counts, and fallback reasons.
 
+## Documentation
+
+API reference, user guide, and gallery examples are built with Sphinx (numpydoc
++ pydata-sphinx-theme, matching skfolio's documentation style):
+
+```bash
+pip install -e ".[docs]"
+cd docs && make html
+```
+
+Open `docs/_build/html/index.html`. Continuous integration builds the docs on
+every pull request and publishes them to GitHub Pages from `main`.
+
 ## Installation and tests
 
 The package targets skfolio 1.x. Its only additional runtime dependency is

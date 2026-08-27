@@ -1,4 +1,8 @@
-"""Frozen multi-path workloads used by tests and the publishable benchmark."""
+"""Frozen multi-path workloads used by tests and the publishable benchmark.
+
+These helpers build synthetic factor returns and skfolio splitters with fixed
+shapes so correctness tests and timing scripts share the same workloads.
+"""
 
 from __future__ import annotations
 
@@ -18,6 +22,27 @@ def factor_returns(
     n_factors: int = 8,
     seed: int = 0,
 ) -> pd.DataFrame:
+    """Synthetic factor-model returns for reproducible benchmarks.
+
+    Parameters
+    ----------
+    n_obs : int
+        Number of observations (rows).
+
+    n_assets : int
+        Number of assets (columns).
+
+    n_factors : int, default=8
+        Number of latent factors.
+
+    seed : int, default=0
+        RNG seed for :func:`numpy.random.default_rng`.
+
+    Returns
+    -------
+    X : DataFrame of shape (n_obs, n_assets)
+        ``factors @ loadings + idiosyncratic`` noise.
+    """
     rng = np.random.default_rng(seed)
     factors = rng.normal(0.0, 0.01, size=(n_obs, n_factors))
     loadings = rng.normal(0.0, 1.0, size=(n_factors, n_assets))
@@ -60,6 +85,23 @@ SMOKE_CPCV = {
 
 
 def make_mrc(spec: dict) -> tuple[pd.DataFrame, MultipleRandomizedCV]:
+    """Build returns and a :class:`~skfolio.model_selection.MultipleRandomizedCV`.
+
+    Parameters
+    ----------
+    spec : dict
+        Workload dictionary with keys ``n_obs``, ``n_assets``, ``n_subsamples``,
+        ``asset_subset_size``, ``window_size``, ``train_size``, ``test_size``,
+        and ``seed``. See :data:`SMOKE_MRC` and :data:`FLAGSHIP_MRC`.
+
+    Returns
+    -------
+    X : DataFrame
+        Synthetic returns.
+
+    cv : MultipleRandomizedCV
+        Multi-path randomized walk-forward splitter.
+    """
     X = factor_returns(spec["n_obs"], spec["n_assets"], seed=spec["seed"])
     cv = MultipleRandomizedCV(
         walk_forward=WalkForward(
@@ -74,6 +116,24 @@ def make_mrc(spec: dict) -> tuple[pd.DataFrame, MultipleRandomizedCV]:
 
 
 def make_cpcv(spec: dict) -> tuple[pd.DataFrame, CombinatorialPurgedCV]:
+    """Build returns and a :class:`~skfolio.model_selection.CombinatorialPurgedCV`.
+
+    Parameters
+    ----------
+    spec : dict
+        Workload dictionary with keys ``n_obs``, ``n_assets``,
+        ``target_n_test_paths``, ``target_train_size``, and ``seed``.
+        See :data:`SMOKE_CPCV`.
+
+    Returns
+    -------
+    X : DataFrame
+        Synthetic returns.
+
+    cv : CombinatorialPurgedCV
+        Combinatorial purged cross-validator sized via
+        :func:`~skfolio.model_selection.optimal_folds_number`.
+    """
     X = factor_returns(spec["n_obs"], spec["n_assets"], seed=spec["seed"])
     n_folds, n_test = optimal_folds_number(
         n_observations=spec["n_obs"],
