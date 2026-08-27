@@ -15,6 +15,12 @@ prediction = cross_val_predict(MeanRisk(), X, cv=cv)
 
 The result is still a skfolio `MultiPeriodPortfolio` or `Population`.
 
+Internally a call is compiled once (`cv_plan`) then executed: overlapping
+training moments are updated from sufficient statistics, a compact OSQP or
+Clarabel engine reuses a fixed problem shape across folds, and test portfolios
+are assembled from `weights_`. Estimators outside the compact subset still use
+native `fit` plus that same assembly path.
+
 ## What it does
 
 Backtests repeatedly fit nearly identical portfolios. This package recognises

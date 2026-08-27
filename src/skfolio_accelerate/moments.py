@@ -1,30 +1,77 @@
-"""Empirical moments with sliding-window and CPCV fold-block reuse."""
+"""Empirical moments from overlapping CV training windows.
+
+The cache stores sufficient statistics
+
+    n  = number of observations
+    s  = sum of rows                          (first moment × n)
+    G  = XᵀX                                  (second raw moment)
+
+and forms the unbiased sample covariance only when a solver needs it:
+
+    μ = s / n
+    Σ = (G − s sᵀ / n) / (n − ddof)     with ddof=1
+
+This is algebraically the same estimator as ``numpy.cov(..., ddof=1)`` and as
+skfolio's default :class:`~skfolio.moments.EmpiricalCovariance` *before* the
+optional nearest-PD projection. Rolling WalkForward windows and CPCV fold
+blocks are applied as exact rank-k updates of ``(s, G)``, not as a different
+statistical estimator.
+
+``keep_returns=True`` additionally stores the training window itself for
+scenario-based risks. Those arrays are views into the parent returns matrix
+when the training rows are contiguous.
+"""
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 from numpy.typing import NDArray
 
+from skfolio_accelerate._arrays import as_float_2d, contiguous_row_slice
 from skfolio_accelerate.cv_plan import FoldSpec
 
+__all__ = [
+    "FoldMoments",
+    "OverlapMomentCache",
+    "PathMomentSession",
+    "as_float_2d",
+    "empirical_from_stats",
+    "empirical_from_window",
+    "is_default_empirical",
+    "path_moment_session",
+]
 
-@dataclass
+
+@dataclass(slots=True)
 class FoldMoments:
+    """Moments of one training window.
+
+    ``covariance`` is always populated. ``returns`` is empty when the caller
+    asked not to keep scenarios (variance / inverse-volatility).
+    """
+
     mu: NDArray[np.float64]
     covariance: NDArray[np.float64]
     returns: NDArray[np.float64]
     n_observations: int = 0
 
 
-def as_float_2d(X) -> NDArray[np.float64]:
-    arr = X.to_numpy(copy=False) if hasattr(X, "to_numpy") else np.asarray(X)
-    return np.ascontiguousarray(arr, dtype=np.float64)
-
-
 def is_default_empirical(estimator) -> bool:
-    """True when moments are sample mean + sample covariance (ddof=1)."""
+    """True when moments are sample mean + sample covariance (ddof=1).
+
+    Custom ``EmpiricalPrior`` options that change the statistical estimator
+    (log-normal projection, investment horizon, non-default mu/covariance
+    classes, rolling ``window_size``, ``assume_centered``, ``ddof != 1``,
+    ``max_history``) must not use the compact path.
+
+    Default ``EmpiricalCovariance(nearest=True)`` projects to the nearest PD
+    matrix after ``numpy.cov``. The compact Gram formula skips that
+    projection. The two coincide when the sample covariance is already PD,
+    which is the intended compact regime (typically ``T > n_assets``).
+    """
     prior = getattr(estimator, "prior_estimator", None)
     if prior is None:
         return True
@@ -33,6 +80,8 @@ def is_default_empirical(estimator) -> bool:
     if getattr(prior, "is_log_normal", False):
         return False
     if getattr(prior, "investment_horizon", None) is not None:
+        return False
+    if getattr(prior, "max_history", None) is not None:
         return False
     mu = getattr(prior, "mu_estimator", None)
     cov = getattr(prior, "covariance_estimator", None)
@@ -46,10 +95,12 @@ def is_default_empirical(estimator) -> bool:
         return False
     if cov is not None and int(getattr(cov, "ddof", 1)) != 1:
         return False
+    if cov is not None and getattr(cov, "assume_centered", False):
+        return False
     return True
 
 
-def _pack(
+def _finish_moments(
     mu: NDArray[np.float64],
     cov: NDArray[np.float64],
     returns: NDArray[np.float64] | None,
@@ -83,7 +134,7 @@ def empirical_from_window(
         if cov.ndim == 0:
             cov = cov.reshape(1, 1)
     returns = window if keep_returns else None
-    return _pack(mu, cov, returns, t, keep_returns=keep_returns)
+    return _finish_moments(mu, cov, returns, t, keep_returns=keep_returns)
 
 
 def empirical_from_stats(
@@ -95,34 +146,21 @@ def empirical_from_stats(
     keep_returns: bool,
     ddof: int = 1,
 ) -> FoldMoments:
+    """Unbiased covariance from raw sufficient statistics ``(n, sum, XᵀX)``."""
     t = int(n_obs)
     mu = sum_vec / t
     cov = (gram - np.outer(sum_vec, sum_vec) / t) / (t - ddof)
-    return _pack(mu, cov, returns, t, keep_returns=keep_returns)
+    return _finish_moments(mu, cov, returns, t, keep_returns=keep_returns)
 
 
-def _contiguous_bounds(idx: NDArray[np.intp]) -> tuple[int, int] | None:
-    if idx.ndim != 1 or idx.size == 0:
-        return None
-    start = int(idx[0])
-    stop = int(idx[-1]) + 1
-    if stop - start != idx.size or start < 0:
-        return None
-    if idx.size > 2 and int(idx[idx.size // 2]) != start + idx.size // 2:
-        return None
-    if idx.size > 1 and int(idx[1]) != start + 1:
-        return None
-    return start, stop
-
-
-@dataclass
+@dataclass(slots=True)
 class _BlockStats:
     n_obs: int
     sum_vec: NDArray[np.float64]
     gram: NDArray[np.float64]
 
 
-@dataclass
+@dataclass(slots=True)
 class _SlideState:
     start: int
     stop: int
@@ -131,7 +169,7 @@ class _SlideState:
     gram: NDArray[np.float64]
 
 
-@dataclass
+@dataclass(slots=True)
 class _IndexState:
     rows: NDArray[np.intp]
     sum_vec: NDArray[np.float64]
@@ -143,6 +181,10 @@ class OverlapMomentCache:
 
     ``n_fits`` counts cold Gram computations. ``n_updates`` counts rank-k slides
     or block additions that avoid a full ``X.T @ X`` on the train window.
+
+    Updates are applied to copies of ``(sum_vec, gram)``. Cancellation can in
+    principle erode positive-definiteness after many slides; OSQP then retries
+    with a small diagonal jitter. No additional approximation is introduced.
     """
 
     def __init__(
@@ -151,7 +193,7 @@ class OverlapMomentCache:
         *,
         keep_returns: bool,
         ddof: int = 1,
-        fold_blocks: list[NDArray[np.intp]] | None = None,
+        fold_blocks: Sequence[NDArray[np.intp]] | None = None,
     ) -> None:
         self.X = np.ascontiguousarray(X, dtype=np.float64)
         self.keep_returns = keep_returns
@@ -177,11 +219,11 @@ class OverlapMomentCache:
         if self._blocks is not None and fold.train_block_ids:
             return self._from_blocks(fold)
 
-        bounds = _contiguous_bounds(fold.train_idx)
+        bounds = contiguous_row_slice(fold.train_idx)
         if bounds is None or path_key in self._indexed:
             return self._from_index_rows(fold.train_idx, path_key)
 
-        start, stop = bounds
+        start, stop = bounds.start, bounds.stop
         prev = self._slide.get(path_key)
         if prev is None or prev.stop <= start or prev.start >= stop:
             window = self.X[start:stop]
@@ -304,24 +346,25 @@ class OverlapMomentCache:
         )
 
     def _from_blocks(self, fold: FoldSpec) -> FoldMoments:
-        assert self._blocks is not None
+        if self._blocks is None:
+            raise RuntimeError("CPCV fold-block statistics were not compiled")
         n_obs = 0
-        sum_vec = None
-        gram = None
+        sum_vec: NDArray[np.float64] | None = None
+        gram: NDArray[np.float64] | None = None
         for block_id in fold.train_block_ids:
             block = self._blocks[block_id]
             n_obs += block.n_obs
             sum_vec = block.sum_vec if sum_vec is None else sum_vec + block.sum_vec
             gram = block.gram if gram is None else gram + block.gram
+        if sum_vec is None or gram is None:
+            raise ValueError("CPCV training window has no fold blocks")
         if fold.train_excluded_idx.size:
             excluded = self.X[fold.train_excluded_idx]
             n_obs -= int(excluded.shape[0])
             sum_vec = sum_vec - excluded.sum(axis=0)
             gram = gram - excluded.T @ excluded
         self.n_updates += 1
-        returns = None
-        if self.keep_returns:
-            returns = self.X[fold.train_idx]
+        returns = self.X[fold.train_idx] if self.keep_returns else None
         return empirical_from_stats(
             n_obs,
             sum_vec,
@@ -330,3 +373,35 @@ class OverlapMomentCache:
             keep_returns=self.keep_returns,
             ddof=self.ddof,
         )
+
+
+@dataclass(slots=True)
+class PathMomentSession:
+    """Moment cache bound to one MRC asset subset or the full universe."""
+
+    cache: OverlapMomentCache
+    x_work: NDArray[np.float64]
+
+    def get(self, fold: FoldSpec) -> FoldMoments:
+        return self.cache.get(fold, path_key=fold.path_id)
+
+
+def path_moment_session(
+    X: NDArray[np.float64],
+    folds: Sequence[FoldSpec],
+    *,
+    keep_returns: bool,
+    fold_blocks: Sequence[NDArray[np.intp]] | None = None,
+) -> PathMomentSession:
+    """Slice MRC assets once, then reuse overlapping train-window statistics."""
+    asset_idx = folds[0].asset_idx if folds else None
+    if asset_idx is None:
+        x_work = X
+        blocks = fold_blocks
+    else:
+        x_work = X[:, np.asarray(asset_idx, dtype=np.intp)]
+        blocks = None
+    return PathMomentSession(
+        cache=OverlapMomentCache(x_work, keep_returns=keep_returns, fold_blocks=blocks),
+        x_work=x_work,
+    )

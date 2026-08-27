@@ -1,4 +1,9 @@
-"""Assemble skfolio MultiPeriodPortfolio / Population from fold weights."""
+"""Assemble skfolio MultiPeriodPortfolio / Population from fold weights.
+
+Ranking helpers treat numerical closeness as a possible tie. Matching Sharpe
+values to machine precision does not by itself prove that two rankings are
+the same; callers should pass ``score_tolerance`` when solver noise matters.
+"""
 
 from __future__ import annotations
 
@@ -8,29 +13,8 @@ from scipy.stats import rankdata
 from skfolio.population import Population
 from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 
-
-def _as_matrix(X) -> NDArray[np.float64]:
-    if hasattr(X, "to_numpy"):
-        arr = X.to_numpy(copy=False)
-    else:
-        arr = np.asarray(X)
-    if arr.dtype != np.float64:
-        return np.asarray(arr, dtype=np.float64)
-    return arr
-
-
-def _contiguous_slice(rows: NDArray[np.intp]) -> slice | None:
-    if rows.size == 0:
-        return None
-    start = int(rows[0])
-    stop = int(rows[-1]) + 1
-    if stop - start != rows.size:
-        return None
-    if rows.size > 1 and int(rows[1]) != start + 1:
-        return None
-    if rows.size > 2 and int(rows[rows.size // 2]) != start + rows.size // 2:
-        return None
-    return slice(start, stop)
+from skfolio_accelerate._arrays import as_float_array, contiguous_row_slice
+from skfolio_accelerate.cv_plan import CVPlan
 
 
 def path_sharpes(prediction) -> np.ndarray:
@@ -109,9 +93,15 @@ def spearman_rank_correlation(
     return float(np.corrcoef(ranked_ref, ranked_obs)[0, 1])
 
 
-def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:
-    """Compute path Sharpes without constructing thousands of Portfolio objects."""
-    matrix = _as_matrix(X)
+def path_sharpes_from_weights(
+    X, cv_plan: CVPlan, weights_by_fold: dict[int, NDArray[np.float64]]
+) -> np.ndarray:
+    """Compute path Sharpes without constructing thousands of Portfolio objects.
+
+    Uses the same sample standard deviation (``ddof=1``) as skfolio's default
+    Sharpe, with a zero risk-free rate. Fold order matches :func:`assemble_prediction`.
+    """
+    matrix = as_float_array(X)
     path_returns: list[list[NDArray[np.float64]]] = [[] for _ in range(cv_plan.n_paths)]
     for fold in cv_plan.folds:
         weights = weights_by_fold[fold.fold_id]
@@ -120,7 +110,7 @@ def path_sharpes_from_weights(X, cv_plan, weights_by_fold) -> np.ndarray:
         else:
             segments = ((fold.test_idx, fold.path_id),)
         for rows, path_id in segments:
-            row_selector = _contiguous_slice(rows)
+            row_selector = contiguous_row_slice(rows)
             if row_selector is None:
                 row_selector = rows
             if fold.asset_idx is None:
@@ -144,12 +134,49 @@ def window_view(
 ) -> NDArray:
     """Row (and optional column) slice, using a view when the rows are contiguous."""
     rows = np.asarray(rows, dtype=np.intp)
-    row_selector = _contiguous_slice(rows)
+    row_selector = contiguous_row_slice(rows)
     if row_selector is None:
         row_selector = rows
     if cols is None:
         return matrix[row_selector]
     return matrix[row_selector][:, np.asarray(cols, dtype=np.intp)]
+
+
+def _is_default_range(labels) -> bool:
+    return (
+        type(labels).__name__ == "RangeIndex"
+        and getattr(labels, "start", None) == 0
+        and getattr(labels, "step", None) == 1
+    )
+
+
+def _keep_frame_labels(X) -> bool:
+    """True when ``X`` carries timestamps or asset names worth preserving."""
+    index = getattr(X, "index", None)
+    columns = getattr(X, "columns", None)
+    if index is None or columns is None:
+        return False
+    return not (_is_default_range(index) and _is_default_range(columns))
+
+
+def _test_observations(
+    X,
+    idx: NDArray[np.intp],
+    cols: NDArray[np.intp] | None,
+    *,
+    x_np: NDArray[np.float64],
+):
+    """Numeric test-fold view, wrapping a labeled frame only when needed."""
+    rows = np.asarray(idx, dtype=np.intp)
+    values = window_view(x_np, rows, cols)
+    if not _keep_frame_labels(X):
+        return values
+    selector = contiguous_row_slice(rows)
+    row_sel: slice | NDArray[np.intp] = selector if selector is not None else rows
+    columns = X.columns if cols is None else X.columns[np.asarray(cols, dtype=np.intp)]
+    import pandas as pd
+
+    return pd.DataFrame(values, index=X.index[row_sel], columns=columns)
 
 
 def make_segment_portfolio(
@@ -162,8 +189,8 @@ def make_segment_portfolio(
     x_np: NDArray[np.float64] | None = None,
     segment_params: dict | None = None,
 ) -> Portfolio:
-    matrix = _as_matrix(X) if x_np is None else x_np
-    x_test = window_view(matrix, np.asarray(idx, dtype=np.intp), cols)
+    matrix = as_float_array(X) if x_np is None else x_np
+    x_test = _test_observations(X, idx, cols, x_np=matrix)
     extra = {} if segment_params is None else dict(segment_params)
     extra.pop("name", None)
     extra.pop("check_observations_order", None)
@@ -177,17 +204,17 @@ def make_segment_portfolio(
 
 def assemble_prediction(
     X,
-    cv_plan,
+    cv_plan: CVPlan,
     weights_by_fold: dict[int, NDArray[np.float64]],
     *,
     name: str = "MeanRisk",
     portfolio_params: dict | None = None,
     segment_params: dict | None = None,
-):
+) -> MultiPeriodPortfolio | Population:
     """Build a skfolio MultiPeriodPortfolio or Population from fold weights."""
     extra = {} if portfolio_params is None else dict(portfolio_params)
     extra.setdefault("check_observations_order", False)
-    x_np = _as_matrix(X)
+    x_np = as_float_array(X)
 
     if cv_plan.combinatorial or cv_plan.multi_path:
         path_lists: list[list[Portfolio]] = [[] for _ in range(cv_plan.n_paths)]

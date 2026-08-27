@@ -21,7 +21,7 @@ from skfolio.optimization import (
     RiskBudgeting,
 )
 from skfolio.prior import EmpiricalPrior
-from sklearn.model_selection import TimeSeriesSplit
+from sklearn.model_selection import KFold, TimeSeriesSplit
 
 from skfolio_accelerate import cross_val_predict, path_sharpes
 from skfolio_accelerate.flagship import SMOKE_MRC, make_mrc
@@ -270,3 +270,14 @@ def test_transaction_costs_stay_on_sequential_native_path():
     _assert_same_paths(pred, ref)
     assert report.backend == "sklearn"
     assert "previous_weights" in (report.fallback_reason or "")
+
+
+def test_shuffled_kfold_is_rejected_like_skfolio():
+    X = synthetic_returns(60, 4, seed=37)
+    shuffled = KFold(n_splits=3, shuffle=True, random_state=0)
+    with pytest.raises(ValueError, match="shuffle"):
+        skfolio_cv_predict(MeanRisk(), X, cv=shuffled)
+    with pytest.raises(ValueError, match="shuffle"):
+        cross_val_predict(
+            MeanRisk(), X, cv=KFold(n_splits=3, shuffle=True, random_state=0)
+        )

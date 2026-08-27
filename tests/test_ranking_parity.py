@@ -174,3 +174,23 @@ def test_ranking_metrics_treat_numerically_equal_scores_as_ties():
         observed,
         score_tolerance=1e-8,
     ) == pytest.approx(1.0)
+
+
+def test_ranking_metrics_reject_empty_nan_and_mismatched_inputs():
+    with pytest.raises(ValueError, match="non-empty and finite"):
+        ranking_precision_at_k([], [], k=1)
+    with pytest.raises(ValueError, match="non-empty and finite"):
+        ranking_precision_at_k([1.0, np.nan], [1.0, 0.5], k=1)
+    with pytest.raises(ValueError, match="one-dimensional"):
+        ranking_precision_at_k([[1.0, 2.0]], [1.0, 2.0], k=1)
+    with pytest.raises(ValueError, match="at least two"):
+        spearman_rank_correlation([1.0], [1.0])
+    with pytest.raises(ValueError, match="non-negative"):
+        ranking_precision_at_k([1.0, 0.0], [1.0, 0.0], k=1, score_tolerance=-1e-9)
+
+
+def test_ranking_metrics_constant_scores_and_float32():
+    reference = np.ones(4, dtype=np.float32)
+    observed = np.ones(4, dtype=np.float32)
+    assert ranking_precision_at_k(reference, observed, k=2) == 1.0
+    assert np.isnan(spearman_rank_correlation(reference, observed))
