@@ -1,15 +1,33 @@
 """Direct MeanRisk QP, LP, SOCP, and exponential-cone engines.
 
-Variance uses OSQP. Scenario, downside, and drawdown families use Clarabel.
-All engines bypass CVXPY and reuse fixed sparse topology only while dimensions
-and compact eligibility remain equivalent.
+These engines reproduce skfolio's boxed MeanRisk problem for the compact
+subset, bypassing CVXPY. They are not a general cone-solver layer.
+
+Equivalence with skfolio (see ``ConvexOptimization`` in skfolio 1.0):
+
+* Variance is ``wᵀ Σ w`` plus ``l2_coef ‖w‖²``. skfolio implements variance as
+  the square of an SOC of a covariance square-root; that is the same quadratic
+  when ``Σ`` is PD. OSQP uses ``½ xᵀ P x + qᵀ x`` with ``P = 2 Σ + 2 ℓ₂ I``.
+* Maximize-utility multiplies the risk term by ``risk_aversion`` and adds
+  ``-μᵀ w`` (skfolio ``MAXIMIZE_UTILITY``).
+* Scenario measures use skfolio's minimum acceptable return (asset mean when
+  unset) and the same LP / QP / SOC / exponential-cone constraints.
+* Drawdown is the ordered, non-compounded recurrence ``v₀ = 0``,
+  ``vₜ ≥ vₜ₋₁ - rₜ``, ``vₜ ≥ 0``.
+* Compact eligibility already forbids transaction costs, management fees, and a
+  non-zero risk-free rate, so those terms that appear in skfolio's CVXPY
+  expressions are identically zero here.
+
+Topology (cone types and sparsity pattern) is reused while ``(n_assets, T)``
+stay constant. Numeric returns and covariance are the only fold-varying data.
+Solver objects are local to one ``cross_val_predict`` / ``grid_search`` call.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
+from typing import Any, Protocol
 
 import clarabel
 import numpy as np
@@ -20,6 +38,22 @@ from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
 from skfolio_accelerate.moments import FoldMoments
+
+_SCENARIO_RISKS = frozenset(
+    {
+        RiskMeasure.SEMI_VARIANCE,
+        RiskMeasure.SEMI_DEVIATION,
+        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        RiskMeasure.WORST_REALIZATION,
+        RiskMeasure.CVAR,
+        RiskMeasure.EVAR,
+        RiskMeasure.MAX_DRAWDOWN,
+        RiskMeasure.AVERAGE_DRAWDOWN,
+        RiskMeasure.CDAR,
+        RiskMeasure.EDAR,
+    }
+)
 
 
 def _as_bounds(value: Any, n: int, default: float) -> NDArray[np.float64]:
@@ -34,19 +68,15 @@ def _as_bounds(value: Any, n: int, default: float) -> NDArray[np.float64]:
 def _upper_csc(matrix: NDArray[np.float64]) -> sp.csc_matrix:
     """Upper-triangular CSC that keeps explicit zeros so OSQP updates stay valid."""
     n = int(matrix.shape[0])
-    data: list[float] = []
-    indices: list[int] = []
-    indptr = [0]
-    for col in range(n):
-        column = matrix[: col + 1, col]
-        data.extend(column.tolist())
-        indices.extend(range(col + 1))
-        indptr.append(len(data))
+    rows, _cols = _upper_indices(n)
+    indptr = np.empty(n + 1, dtype=np.int32)
+    indptr[0] = 0
+    indptr[1:] = np.cumsum(np.arange(1, n + 1, dtype=np.int32))
     return sp.csc_matrix(
         (
-            np.asarray(data, dtype=np.float64),
-            np.asarray(indices, dtype=np.int32),
-            np.asarray(indptr, dtype=np.int32),
+            _upper_data(matrix),
+            np.asarray(rows, dtype=np.int32),
+            indptr,
         ),
         shape=(n, n),
     )
@@ -96,37 +126,103 @@ def _clarabel_settings() -> clarabel.DefaultSettings:
     return settings
 
 
-def estimator_spec(estimator) -> dict[str, Any]:
-    return {
-        "risk_measure": getattr(estimator, "risk_measure", RiskMeasure.VARIANCE),
-        "objective": getattr(
+def _clarabel_try_update(
+    solver: clarabel.DefaultSolver | None,
+    P: sp.csc_matrix,
+    q: NDArray[np.float64],
+    A: sp.csc_matrix,
+    b: NDArray[np.float64],
+    cones: list[Any],
+    *,
+    update: dict[str, Any],
+) -> tuple[clarabel.DefaultSolver, bool]:
+    """Reuse a Clarabel workspace when the API allows an in-place data update.
+
+    Clarabel refuses some updates after presolve / chordal decomposition; we
+    disable those in :func:`_clarabel_settings` and still fall back to a new
+    ``DefaultSolver`` when ``is_data_update_allowed`` is false or ``update``
+    raises. A failed update must not leak a half-updated workspace.
+    """
+    settings = _clarabel_settings()
+    if solver is None:
+        return clarabel.DefaultSolver(P, q, A, b, cones, settings), False
+    try:
+        if (
+            hasattr(solver, "is_data_update_allowed")
+            and not solver.is_data_update_allowed()
+        ):
+            raise RuntimeError("Clarabel data update is unavailable")
+        solver.update(**update)
+        return solver, True
+    except Exception:
+        return clarabel.DefaultSolver(P, q, A, b, cones, settings), False
+
+
+@dataclass(frozen=True, slots=True)
+class MeanRiskSpec:
+    """Numeric MeanRisk configuration that the compact engines are allowed to see.
+
+    Built only after :func:`skfolio_accelerate.predict.blocked_reason` has
+    accepted the estimator. Fields that would change the problem (ratio
+    objectives, risk limits, MIP, custom priors, ...) never appear here.
+    """
+
+    risk_measure: RiskMeasure
+    objective: ObjectiveFunction
+    l2_coef: float
+    risk_aversion: float
+    cvar_beta: float
+    evar_beta: float
+    cdar_beta: float
+    edar_beta: float
+    min_acceptable_return: Any
+    min_weights: Any
+    max_weights: Any
+    budget: float
+
+    def needs_returns(self) -> bool:
+        return self.risk_measure is not RiskMeasure.VARIANCE
+
+
+class CompactEngine(Protocol):
+    n_warm_starts: int
+
+    def solve(
+        self, moments: FoldMoments, *, warm: bool = True
+    ) -> NDArray[np.float64]: ...
+
+
+def estimator_spec(estimator) -> MeanRiskSpec:
+    return MeanRiskSpec(
+        risk_measure=getattr(estimator, "risk_measure", RiskMeasure.VARIANCE),
+        objective=getattr(
             estimator, "objective_function", ObjectiveFunction.MINIMIZE_RISK
         ),
-        "l2_coef": float(getattr(estimator, "l2_coef", 0.0) or 0.0),
-        "risk_aversion": float(getattr(estimator, "risk_aversion", 1.0) or 1.0),
-        "cvar_beta": float(getattr(estimator, "cvar_beta", 0.95) or 0.95),
-        "evar_beta": float(getattr(estimator, "evar_beta", 0.95) or 0.95),
-        "cdar_beta": float(getattr(estimator, "cdar_beta", 0.95) or 0.95),
-        "edar_beta": float(getattr(estimator, "edar_beta", 0.95) or 0.95),
-        "min_acceptable_return": getattr(estimator, "min_acceptable_return", None),
-        "min_weights": getattr(estimator, "min_weights", 0.0),
-        "max_weights": getattr(estimator, "max_weights", 1.0),
-        "budget": float(getattr(estimator, "budget", 1.0) or 1.0),
-    }
+        l2_coef=float(getattr(estimator, "l2_coef", 0.0) or 0.0),
+        risk_aversion=float(getattr(estimator, "risk_aversion", 1.0) or 1.0),
+        cvar_beta=float(getattr(estimator, "cvar_beta", 0.95) or 0.95),
+        evar_beta=float(getattr(estimator, "evar_beta", 0.95) or 0.95),
+        cdar_beta=float(getattr(estimator, "cdar_beta", 0.95) or 0.95),
+        edar_beta=float(getattr(estimator, "edar_beta", 0.95) or 0.95),
+        min_acceptable_return=getattr(estimator, "min_acceptable_return", None),
+        min_weights=getattr(estimator, "min_weights", 0.0),
+        max_weights=getattr(estimator, "max_weights", 1.0),
+        budget=float(getattr(estimator, "budget", 1.0) or 1.0),
+    )
 
 
 class MinVarianceOSQP:
     """Long-only (boxed) mean-variance QP with OSQP warm starts."""
 
-    def __init__(self, spec: dict[str, Any], n_assets: int) -> None:
+    def __init__(self, spec: MeanRiskSpec, n_assets: int) -> None:
         self.spec = spec
         self.n_assets = int(n_assets)
-        self.min_w = _as_bounds(spec["min_weights"], n_assets, 0.0)
-        self.max_w = _as_bounds(spec["max_weights"], n_assets, 1.0)
-        self.budget = float(spec["budget"])
-        self.l2 = float(spec["l2_coef"])
-        self.objective = spec["objective"]
-        self.risk_aversion = float(spec["risk_aversion"])
+        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.budget = float(spec.budget)
+        self.l2 = float(spec.l2_coef)
+        self.objective = spec.objective
+        self.risk_aversion = float(spec.risk_aversion)
         self._prob: osqp.OSQP | None = None
         self._x: NDArray[np.float64] | None = None
         self._y: NDArray[np.float64] | None = None
@@ -201,21 +297,23 @@ class MinVarianceOSQP:
 
 
 class CVaRClarabel:
-    """Boxed CVaR LP: min alpha + c 1'u s.t. R w + alpha + u >= 0."""
+    """Boxed CVaR LP: min alpha + c 1'u s.t. R w + alpha + u >= 0.
 
-    def __init__(
-        self, spec: dict[str, Any], n_assets: int, n_observations: int
-    ) -> None:
+    Matches skfolio ``_cvar_risk`` with zero transaction costs and fees:
+    ``α + Σ u / (T (1-β))``, ``R w + α + u ≥ 0``, ``u ≥ 0``.
+    """
+
+    def __init__(self, spec: MeanRiskSpec, n_assets: int, n_observations: int) -> None:
         self.spec = spec
         self.n_assets = int(n_assets)
         self.n_observations = int(n_observations)
-        self.min_w = _as_bounds(spec["min_weights"], n_assets, 0.0)
-        self.max_w = _as_bounds(spec["max_weights"], n_assets, 1.0)
-        self.budget = float(spec["budget"])
-        self.l2 = float(spec["l2_coef"])
-        self.beta = float(spec["cvar_beta"])
-        self.objective = spec["objective"]
-        self.risk_aversion = float(spec["risk_aversion"])
+        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.budget = float(spec.budget)
+        self.l2 = float(spec.l2_coef)
+        self.beta = float(spec.cvar_beta)
+        self.objective = spec.objective
+        self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
         self._A: sp.csc_matrix | None = None
         self._q: NDArray[np.float64] | None = None
@@ -324,31 +422,16 @@ class CVaRClarabel:
         self._bind_R(moments.returns)
         self._bind_q(moments)
         assert self._A is not None and self._q is not None and self._b is not None
-        settings = _clarabel_settings()
-        if self.solver is None:
-            self.solver = clarabel.DefaultSolver(
-                self._P, self._q, self._A, self._b, self._cones, settings
-            )
-        else:
-            try:
-                allowed = True
-                if hasattr(self.solver, "is_data_update_allowed"):
-                    allowed = bool(self.solver.is_data_update_allowed())
-                if not allowed:
-                    self.solver = clarabel.DefaultSolver(
-                        self._P, self._q, self._A, self._b, self._cones, settings
-                    )
-                else:
-                    if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
-                        self.solver.update(q=self._q, A=self._A)
-                    else:
-                        self.solver.update(A=self._A)
-                    if warm:
-                        self.n_warm_starts += 1
-            except Exception:
-                self.solver = clarabel.DefaultSolver(
-                    self._P, self._q, self._A, self._b, self._cones, settings
-                )
+        update = (
+            {"q": self._q, "A": self._A}
+            if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY
+            else {"A": self._A}
+        )
+        self.solver, updated = _clarabel_try_update(
+            self.solver, self._P, self._q, self._A, self._b, self._cones, update=update
+        )
+        if updated and warm:
+            self.n_warm_starts += 1
         solution = self.solver.solve()
         status = str(solution.status).lower()
         if "solved" not in status:
@@ -422,18 +505,16 @@ class ScenarioClarabel:
     Numeric returns and expected returns are rebound for each training window.
     """
 
-    def __init__(
-        self, spec: dict[str, Any], n_assets: int, n_observations: int
-    ) -> None:
+    def __init__(self, spec: MeanRiskSpec, n_assets: int, n_observations: int) -> None:
         self.spec = spec
         self.n_assets = int(n_assets)
         self.n_observations = int(n_observations)
-        self.min_w = _as_bounds(spec["min_weights"], n_assets, 0.0)
-        self.max_w = _as_bounds(spec["max_weights"], n_assets, 1.0)
-        self.budget = float(spec["budget"])
-        self.l2 = float(spec["l2_coef"])
-        self.objective = spec["objective"]
-        self.risk_aversion = float(spec["risk_aversion"])
+        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.budget = float(spec.budget)
+        self.l2 = float(spec.l2_coef)
+        self.objective = spec.objective
+        self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
         self.n_warm_starts = 0
 
@@ -475,7 +556,7 @@ class ScenarioClarabel:
         NDArray[np.float64],
         list[Any],
     ]:
-        risk = self.spec["risk_measure"]
+        risk = self.spec.risk_measure
         returns = np.asarray(moments.returns, dtype=np.float64)
         t, n = returns.shape
         lam = self._risk_scale()
@@ -489,9 +570,7 @@ class ScenarioClarabel:
             q = np.zeros(nv, dtype=np.float64)
             coefficient = 2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0
             q[n:] = lam * coefficient / t
-            deviations = _scenario_deviations(
-                moments, self.spec["min_acceptable_return"]
-            )
+            deviations = _scenario_deviations(moments, self.spec.min_acceptable_return)
             for k in range(t):
                 nonneg.append([(n + k, -1.0)])
                 nonneg_b.append(0.0)
@@ -536,7 +615,7 @@ class ScenarioClarabel:
         NDArray[np.float64],
         list[Any],
     ]:
-        risk = self.spec["risk_measure"]
+        risk = self.spec.risk_measure
         returns = np.asarray(moments.returns, dtype=np.float64)
         t, n = returns.shape
         d0 = n
@@ -571,7 +650,7 @@ class ScenarioClarabel:
             nv = z0 + t
             q = np.zeros(nv, dtype=np.float64)
             q[alpha] = lam
-            q[z0:] = lam / (t * (1.0 - float(self.spec["cdar_beta"])))
+            q[z0:] = lam / (t * (1.0 - float(self.spec.cdar_beta)))
             for k in range(t):
                 nonneg.append([(z0 + k, -1.0)])
                 nonneg_b.append(0.0)
@@ -612,7 +691,7 @@ class ScenarioClarabel:
         NDArray[np.float64],
         list[Any],
     ]:
-        deviations = _scenario_deviations(moments, self.spec["min_acceptable_return"])
+        deviations = _scenario_deviations(moments, self.spec.min_acceptable_return)
         t, n = deviations.shape
         u0 = n
         radius = n + t
@@ -656,7 +735,7 @@ class ScenarioClarabel:
         NDArray[np.float64],
         list[Any],
     ]:
-        deviations = _scenario_deviations(moments, self.spec["min_acceptable_return"])
+        deviations = _scenario_deviations(moments, self.spec.min_acceptable_return)
         t, n = deviations.shape
         nv = n + t
         q = np.zeros(nv, dtype=np.float64)
@@ -714,11 +793,11 @@ class ScenarioClarabel:
                 )
                 nonneg_b.append(0.0)
             x = d0 + t + 1
-            beta = float(self.spec["edar_beta"])
+            beta = float(self.spec.edar_beta)
         else:
             d0 = -1
             x = n
-            beta = float(self.spec["evar_beta"])
+            beta = float(self.spec.evar_beta)
         y = x + 1
         z0 = y + 1
         nv = z0 + t
@@ -759,7 +838,7 @@ class ScenarioClarabel:
         )
 
     def _problem(self, moments: FoldMoments):
-        risk = self.spec["risk_measure"]
+        risk = self.spec.risk_measure
         if risk is RiskMeasure.SEMI_VARIANCE:
             return self._semi_variance_problem(moments)
         if risk is RiskMeasure.SEMI_DEVIATION:
@@ -774,75 +853,47 @@ class ScenarioClarabel:
             self.n_observations = t
             self.solver = None
         P, q, A, b, cones = self._problem(moments)
-        settings = _clarabel_settings()
-        if self.solver is None:
-            self.solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
-        else:
-            try:
-                allowed = (
-                    not hasattr(self.solver, "is_data_update_allowed")
-                    or self.solver.is_data_update_allowed()
-                )
-                if not allowed:
-                    raise RuntimeError("Clarabel data update is unavailable")
-                self.solver.update(q=q, A=A, b=b)
-                if warm:
-                    self.n_warm_starts += 1
-            except Exception:
-                self.solver = clarabel.DefaultSolver(P, q, A, b, cones, settings)
+        self.solver, updated = _clarabel_try_update(
+            self.solver, P, q, A, b, cones, update={"q": q, "A": A, "b": b}
+        )
+        if updated and warm:
+            self.n_warm_starts += 1
         solution = self.solver.solve()
         status = str(solution.status).lower()
         if "solved" not in status:
             raise RuntimeError(
-                f"Clarabel {self.spec['risk_measure'].name} failed: {solution.status}"
+                f"Clarabel {self.spec.risk_measure.name} failed: {solution.status}"
             )
         return np.asarray(solution.x[: self.n_assets], dtype=np.float64)
 
 
 def make_compact_engine(
-    spec: dict[str, Any], *, n_assets: int, n_observations: int | None
-):
-    risk = spec["risk_measure"]
+    spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None
+) -> CompactEngine:
+    risk = spec.risk_measure
     if risk is RiskMeasure.VARIANCE:
         return MinVarianceOSQP(spec, n_assets)
+    if risk not in _SCENARIO_RISKS:
+        raise ValueError(f"Unsupported risk_measure {risk}")
+    if n_observations is None:
+        raise ValueError(f"{risk.name} engine requires n_observations")
     if risk is RiskMeasure.CVAR:
-        if n_observations is None:
-            raise ValueError("CVaR engine requires n_observations")
         return CVaRClarabel(spec, n_assets, n_observations)
-    if risk is RiskMeasure.SEMI_VARIANCE:
-        if n_observations is None:
-            raise ValueError("semi-variance engine requires n_observations")
-        return ScenarioClarabel(spec, n_assets, n_observations)
-    if risk in {
-        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
-        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
-        RiskMeasure.WORST_REALIZATION,
-        RiskMeasure.SEMI_DEVIATION,
-        RiskMeasure.MAX_DRAWDOWN,
-        RiskMeasure.AVERAGE_DRAWDOWN,
-        RiskMeasure.CDAR,
-        RiskMeasure.EVAR,
-        RiskMeasure.EDAR,
-    }:
-        if n_observations is None:
-            raise ValueError(f"{risk.name} engine requires n_observations")
-        return ScenarioClarabel(spec, n_assets, n_observations)
-    raise ValueError(f"Unsupported risk_measure {risk}")
+    return ScenarioClarabel(spec, n_assets, n_observations)
 
 
 @dataclass
 class EngineCache:
     """Reuse one compact engine while (n_assets, T) stay constant."""
 
-    spec: dict[str, Any]
-    engine: Any = None
+    spec: MeanRiskSpec
+    engine: CompactEngine | None = None
     n_assets: int = -1
     n_observations: int | None = None
 
-    def get(self, n_assets: int, n_observations: int | None):
-        risk = self.spec["risk_measure"]
+    def get(self, n_assets: int, n_observations: int | None) -> CompactEngine:
         need_new = self.engine is None or n_assets != self.n_assets
-        if risk is not RiskMeasure.VARIANCE:
+        if self.spec.needs_returns():
             need_new = need_new or n_observations != self.n_observations
         if need_new:
             self.engine = make_compact_engine(

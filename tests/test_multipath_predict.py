@@ -11,7 +11,7 @@ from skfolio.model_selection import (
 from skfolio.model_selection import (
     cross_val_predict as skfolio_cv_predict,
 )
-from skfolio.optimization import MeanRisk
+from skfolio.optimization import EqualWeighted, MeanRisk
 from sklearn.model_selection import KFold
 
 from skfolio_accelerate import cross_val_predict, grid_search, path_sharpes
@@ -133,6 +133,22 @@ def test_compile_mrc_records_assets():
     assert plan.multi_path
     assert plan.folds[0].asset_idx is not None
     assert plan.n_paths == SMOKE_MRC["n_subsamples"]
+    assert len(plan.path_batches()) == plan.n_paths
+
+
+def test_dataframe_index_is_preserved_on_assembled_portfolios():
+    import pandas as pd
+
+    values = synthetic_returns(80, 4, seed=22)
+    index = pd.date_range("2020-01-01", periods=values.shape[0], freq="B")
+    X = pd.DataFrame(values, index=index, columns=list("ABCD"))
+    cv = WalkForward(train_size=40, test_size=10)
+    reference = skfolio_cv_predict(EqualWeighted(), X, cv=cv)
+    pred = cross_val_predict(EqualWeighted(), X, cv=cv)
+    np.testing.assert_array_equal(
+        pred.portfolios[0].observations, reference.portfolios[0].observations
+    )
+    assert list(pred.portfolios[0].assets) == list("ABCD")
 
 
 def test_grid_search_shares_moments_and_matches_repeated_predict():
@@ -182,6 +198,19 @@ def test_grid_search_rejects_options_not_in_compact_problem():
             {"l2_coef": [0.0, 1e-2]},
             cv=cv,
         )
+
+
+def test_grid_search_accepts_numpy_scalar_grid():
+    X = synthetic_returns(80, 4, seed=41)
+    cv = WalkForward(train_size=40, test_size=10)
+    result = grid_search(
+        MeanRisk(),
+        X,
+        {"l2_coef": np.array([0.0, np.float64(1e-3), np.float32(1e-2)])},
+        cv=cv,
+    )
+    assert result.best_index_ in {0, 1, 2}
+    assert result.acceleration_report_.n_solves == 3 * cv.get_n_splits(X)
 
 
 def test_mrc_grid_search_matches_repeated_predict():
