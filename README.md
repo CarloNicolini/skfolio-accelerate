@@ -147,46 +147,53 @@ prediction = result.best_prediction_
 
 ## Benchmarks
 
-Measured results depend on data shape and the number of folds. The quick suite
-uses synthetic data, repeats each run three times, and reports the median wall
-time and process-tree peak RSS. It covers every risk measure and public
-optimizer across WalkForward, purged CPCV, and MultipleRandomizedCV:
+Most of the wall-clock win is **variance MeanRisk with many overlapping
+folds**: the compact OSQP QP is reused, so 228–480 solves are 60–77× faster
+than native skfolio. Scenario MeanRisk still rebuilds a Clarabel cone each
+fold, so the same 20-year WalkForward/MRC cases are only 2–4×. A six-solve
+CPCV on that same 20-year sample is ~12× for variance and **~1×** (sometimes
+slightly slower) for CVaR, MAD, and drawdown. EqualWeighted looks fast on
+tiny problems because native `cross_val_predict` spends milliseconds on
+joblib/`fit`/`predict`, not because there is a hidden solver.
+
+![Representative 20-year workload speedups](docs/figures/long-workload-speedups.svg)
+
+The large test is 5,040 × 20 synthetic daily returns, native `n_jobs=1`,
+median of three isolated-process runs (Python 3.12, skfolio 1.0.0):
+
+| Risk | WalkForward (228) | MRC (480) | CPCV (6) | max path Sharpe difference |
+|---|---:|---:|---:|---:|
+| Variance | 60.6× | 76.9× | 11.8× | `4.3e-5` |
+| Semi-variance | 2.3× | 3.0× | 0.98× | `1.1e-16` |
+| MAD | 2.3× | 3.1× | 1.1× | `2.1e-6` |
+| CVaR | 3.3× | 4.1× | 1.1× | `7.4e-6` |
+| Max drawdown | 2.2× | 2.6× | 1.1× | `1.6e-7` |
+
+On the small 120 × 6 suite every fold still pays CVXPY setup, so compact
+scenario risks look closer to variance (about 5–15× vs 19–30×). That ratio
+does not survive once the cone solve dominates. Closed-form EqualWeighted /
+Random / InverseVolatility skip native CV machinery (about 5–13× on this
+tiny problem). Serial estimators that still call native `fit` (HRP, standard
+deviation, Gini, …) are 1.05–2.1× — the same overhead cut, not a compact
+solver. Pipelines and sequential previous weights stay on native skfolio
+(~1×). One EVaR randomized case retried native `fit` plus assembly after
+Clarabel reported `InsufficientProgress`. Peak RSS is typically similar to
+native because importing Python and skfolio dominates these processes.
+
+![Quick benchmark speedups by engine](docs/figures/quick-benchmark-speedups.svg)
+
+![EqualWeighted native CV overhead](docs/figures/cv-overhead-breakdown.svg)
+
+The project does not claim one universal speedup number. Measured results
+depend on data shape and how many overlapping training windows you actually
+run.
+
+The quick suite covers every risk measure and public optimizer across
+WalkForward, purged CPCV, and MultipleRandomizedCV:
 
 ```bash
 PYTHONPATH=src python benchmarks/benchmark_matrix.py --quick --repeats 3
 ```
-
-On the benchmark VM (Python 3.12, skfolio 1.0.0), compact MeanRisk was
-usually 5–30× faster in the small suite. EqualWeighted, Random, and
-InverseVolatility were 4.5–13.2× because they skip native CV machinery.
-Serial estimators that still call native `fit` (HRP, standard deviation)
-picked up the shared assembly path at 1.2–1.7×. That is the same overhead
-cut as EqualWeighted, not a 5–13× floor: the optimiser still dominates.
-Pipelines and sequential previous weights stay on native skfolio (~1×).
-One EVaR randomized case could not complete in Clarabel and automatically
-retried with native `fit` plus assembly. Peak RSS was typically similar to
-native because importing Python and skfolio dominates these small processes.
-
-![Quick benchmark speedup ranges](docs/figures/quick-benchmark-speedups.svg)
-
-![EqualWeighted native CV overhead](docs/figures/cv-overhead-breakdown.svg)
-
-The more useful large test contains 5,040 daily returns. Native skfolio used
-`n_jobs=1`; WalkForward made 228 solves and MRC made 480:
-
-| Risk | WalkForward speedup | MRC speedup | max path Sharpe difference |
-|---|---:|---:|---:|
-| Variance | 62.1× | 75.3× | `4.3e-5` |
-| Semi-variance | 2.3× | 3.0× | `1.1e-16` |
-| MAD | 2.2× | 3.1× | `2.1e-6` |
-| CVaR | 3.3× | 4.2× | `7.4e-6` |
-| Max drawdown | 2.1× | 2.6× | `1.6e-7` |
-
-![Representative 20-year workload speedups](docs/figures/long-workload-speedups.svg)
-
-Small six-solve CPCV cases are often near break-even for scenario risks because
-fixed setup dominates. They are not included in the table above. For this
-reason the project does not claim one universal speedup number.
 
 Reproduce a focused 20-year run with:
 
