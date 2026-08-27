@@ -29,8 +29,8 @@
   </g>
   <g>
     <text x="50" y="148" class="label">Native cross_val_predict</text>
-    <rect x="430" y="128" width="527" height="26" rx="5" fill="#94a3b8"/>
-    <text x="967" y="148" class="value">2.59 ms</text>
+    <rect x="430" y="128" width="535" height="26" rx="5" fill="#94a3b8"/>
+    <text x="967" y="148" class="value">2.63 ms</text>
 
     <text x="50" y="198" class="label">joblib Parallel n_jobs=1</text>
     <rect x="430" y="178" width="500" height="26" rx="5" fill="#64748b"/>
@@ -54,6 +54,6 @@
   </g>
   <line x1="50" y1="430" x2="1070" y2="430" stroke="#dce3ef"/>
   <text x="50" y="456" class="note">sklearn validate_data on a DataFrame dominates EqualWeighted.fit. Closed-form skips fit. Random is the same once Dirichlet draws replace 1/n weights.</text>
-  <text x="50" y="478" class="note">HRP still has to fit; ndarray views plus assembly cut native 18.6 ms to 10.4 ms (~1.8x), not 13x. Standard-deviation MeanRisk only drops 27.2 ms to 22.6 ms (~1.2x).</text>
+    <text x="50" y="478" class="note">HRP still has to fit; ndarray views plus assembly cut native 18.5 ms to 10.2 ms (~1.8×), not a compact-solver gain. Standard-deviation MeanRisk only drops 26.9 ms to 22.3 ms (~1.2×).</text>
   <text x="50" y="500" class="note">Source: in-process profile on Python 3.12, skfolio 1.0.0; not the isolated benchmark_matrix.py RSS runs.</text>
 </svg>
