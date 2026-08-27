@@ -31,6 +31,34 @@ class FoldSpec:
 
     Numpy index arrays remain mutable buffers, but the fold identity (which
     arrays and metadata belong together) cannot be reassigned after compilation.
+
+    Attributes
+    ----------
+    fold_id : int
+        Stable identifier used as the key in weight maps.
+
+    train_idx : ndarray of shape (n_train,)
+        Training observation indices.
+
+    test_idx : ndarray of shape (n_test,)
+        Concatenated test indices (all combinatorial segments joined).
+
+    test_segments : tuple of ndarray
+        Per-path test segments for combinatorial CV. For single-path splitters
+        this is ``(test_idx,)``.
+
+    path_ids : tuple of int
+        Path identifiers aligned with ``test_segments``.
+
+    asset_idx : ndarray of shape (n_subset,) or None
+        Asset subset for MultipleRandomizedCV. ``None`` means the full universe.
+
+    train_block_ids : tuple of int
+        CPCV fold-block identifiers that cover the training window (before purge
+        / embargo exclusions).
+
+    train_excluded_idx : ndarray of shape (n_excluded,)
+        Observations belonging to training blocks but excluded by purge/embargo.
     """
 
     fold_id: int
@@ -46,12 +74,38 @@ class FoldSpec:
 
     @property
     def path_id(self) -> int:
+        """Primary path id (first entry of ``path_ids``, or ``0``)."""
         return int(self.path_ids[0]) if self.path_ids else 0
 
 
 @dataclass(frozen=True, slots=True)
 class CVPlan:
-    """Compiled, reusable description of a cross-validation split sequence."""
+    """Compiled, reusable description of a cross-validation split sequence.
+
+    Attributes
+    ----------
+    splitter_name : str
+        Class name of the original splitter (for diagnostics).
+
+    folds : tuple of FoldSpec
+        All compiled train/test splits in splitter order.
+
+    n_paths : int, default=1
+        Number of test paths (``1`` for WalkForward / KFold).
+
+    combinatorial : bool, default=False
+        ``True`` for CombinatorialPurgedCV-style multi-segment tests.
+
+    multi_path : bool, default=False
+        ``True`` when results should be assembled into a Population.
+
+    kind : {"kfold", "walk_forward", "cpcv", "mrc"}, default="kfold"
+        Coarse splitter family used by execution backends.
+
+    fold_blocks : tuple of ndarray or None, default=None
+        CPCV fold-block row indices for moment reuse. ``None`` unless ``kind``
+        is ``"cpcv"``.
+    """
 
     splitter_name: str
     folds: tuple[FoldSpec, ...]
@@ -63,6 +117,7 @@ class CVPlan:
 
     @property
     def n_splits(self) -> int:
+        """Number of compiled folds."""
         return len(self.folds)
 
     def path_batches(self) -> tuple[tuple[FoldSpec, ...], ...]:
@@ -71,6 +126,11 @@ class CVPlan:
         MRC paths do not share assets, so moment caches and (for variance) OSQP
         workspaces are built per batch. CPCV is multi-path but shares one set of
         fold-block statistics, so it stays as a single batch.
+
+        Returns
+        -------
+        batches : tuple of tuple of FoldSpec
+            One batch per MRC path, or a single batch containing all folds.
         """
         if self.kind != "mrc":
             return (self.folds,)
@@ -81,7 +141,21 @@ class CVPlan:
 
 
 def cpcv_fold_blocks(n_samples: int, n_folds: int) -> list[NDArray[np.intp]]:
-    """Observation indices belonging to each CPCV fold (same rule as skfolio)."""
+    """Observation indices belonging to each CPCV fold (same rule as skfolio).
+
+    Parameters
+    ----------
+    n_samples : int
+        Number of observations.
+
+    n_folds : int
+        Number of combinatorial folds.
+
+    Returns
+    -------
+    blocks : list of ndarray of shape (n_block_i,)
+        Contiguous (or nearly contiguous) index arrays, one per fold.
+    """
     fold_index_num = np.arange(n_samples) // (n_samples // n_folds)
     fold_index_num[fold_index_num == n_folds] = n_folds - 1
     return [
@@ -91,7 +165,44 @@ def cpcv_fold_blocks(n_samples: int, n_folds: int) -> list[NDArray[np.intp]]:
 
 
 def compile_cv_plan(cv, X, y=None) -> CVPlan:
-    """Materialize train/test indices and CPCV metadata for one predict call."""
+    """Materialize train/test indices and CPCV metadata for one predict call.
+
+    This is the only function that iterates ``splitter.split``. Downstream
+    backends must not call the splitter again.
+
+    Parameters
+    ----------
+    cv : int, cross-validation generator or an iterable
+        Splitter definition. Combinatorial and MultipleRandomizedCV instances
+        are detected before falling back to
+        :func:`~sklearn.model_selection.check_cv`.
+
+    X : array-like of shape (n_observations, n_assets)
+        Returns matrix (used only for shape and ``split``).
+
+    y : array-like, optional
+        Target forwarded to ``split``.
+
+    Returns
+    -------
+    plan : CVPlan
+        Immutable plan with folds, path metadata, and optional CPCV blocks.
+
+    Notes
+    -----
+    Mutable splitters that advance RNG state inside ``split`` are consumed
+    exactly once. Callers that need a native fallback should deepcopy ``cv``
+    *before* compiling.
+
+    Examples
+    --------
+    >>> from skfolio.model_selection import WalkForward
+    >>> plan = compile_cv_plan(WalkForward(train_size=100, test_size=20), X)
+    ... # doctest: +SKIP
+    >>> plan.n_splits  # doctest: +SKIP
+    >>> plan.kind  # doctest: +SKIP
+    'walk_forward'
+    """
     if isinstance(cv, MultipleRandomizedCV):
         return _compile_mrc(cv, X, y)
     if isinstance(cv, BaseCombinatorialCV):

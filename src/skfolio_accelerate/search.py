@@ -29,7 +29,32 @@ from skfolio_accelerate.scoring import (
 
 @dataclass
 class GridSearchResult:
-    """Result of :func:`grid_search`."""
+    """Result of :func:`grid_search`.
+
+    Attributes
+    ----------
+    best_params_ : dict
+        Parameter combination with the highest mean path Sharpe.
+
+    best_score_ : float
+        Mean out-of-sample path Sharpe of ``best_params_``.
+
+    best_index_ : int
+        Index into ``cv_results_["params"]``.
+
+    best_prediction_ : MultiPeriodPortfolio or Population
+        Fully assembled prediction for the winning parameters only.
+
+    cv_results_ : dict
+        Search diagnostics with keys:
+
+        * ``"params"`` — list of candidate parameter dicts,
+        * ``"mean_test_score"`` — mean path Sharpe per candidate,
+        * ``"path_scores"`` — ndarray of shape ``(n_candidates, n_paths)``.
+
+    acceleration_report_ : AccelerationReport
+        Timing and warm-start accounting for the shared compact-grid pass.
+    """
 
     best_params_: dict[str, Any]
     best_score_: float
@@ -64,9 +89,64 @@ def _candidate_specs(
 def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResult:
     """Select compact MeanRisk parameters with one shared CV/moment pass.
 
-    Scores are mean out-of-sample path Sharpe ratios. All candidates must be
-    eligible for the compact engine. For general estimator searches, use
+    All candidates must be eligible for the compact engine. Scores are mean
+    out-of-sample path Sharpe ratios computed from fold weights without
+    constructing intermediate Portfolio objects. Only the winning parameter set
+    is materialized.
+
+    Parameters
+    ----------
+    estimator : MeanRisk
+        Base estimator. Each grid point is applied via
+        :meth:`~sklearn.base.BaseEstimator.set_params` on a clone.
+
+    X : array-like of shape (n_observations, n_assets)
+        Price returns of the assets.
+
+    param_grid : dict or list of dict
+        Parameter grid as accepted by
+        :class:`~sklearn.model_selection.ParameterGrid`.
+
+    cv : int, cross-validation generator or an iterable, default=None
+        Cross-validation splitting strategy. Compiled once and shared across
+        all candidates.
+
+    y : array-like, optional
+        Target relative to ``X`` for API compatibility.
+
+    Returns
+    -------
+    result : GridSearchResult
+        Best parameters, scores, assembled prediction, and acceleration report.
+
+    Raises
+    ------
+    ValueError
+        If the grid is empty or any candidate is outside the compact MeanRisk
+        subset.
+
+    Notes
+    -----
+    For general estimators (pipelines, HRP, ratio objectives, ...), use
     skfolio's ``OnlineGridSearch`` or sklearn's ``GridSearchCV``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from skfolio.optimization import MeanRisk
+    >>> from skfolio_accelerate import grid_search
+    >>> result = grid_search(
+    ...     MeanRisk(),
+    ...     X,
+    ...     {"l2_coef": np.logspace(-5, -1, 8)},
+    ...     cv=cv,
+    ... )  # doctest: +SKIP
+    >>> result.best_params_  # doctest: +SKIP
+
+    See Also
+    --------
+    cross_val_predict : Single-estimator amortized prediction.
+    GridSearchResult : Structured search output.
     """
     started = time.perf_counter()
     params, specs = _candidate_specs(estimator, param_grid, y=y, cv=cv)

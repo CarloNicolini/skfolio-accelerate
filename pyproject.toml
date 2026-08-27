@@ -29,8 +29,17 @@ dev = [
   "pytest>=8.0",
   "pytest-cov>=5.0",
 ]
+docs = [
+  "Sphinx>=7.2",
+  "pydata-sphinx-theme~=0.16",
+  "numpydoc",
+  "sphinx-gallery",
+  "sphinx-copybutton",
+  "matplotlib",
+]
 
 [project.urls]
+Documentation = "https://carlonicolini.github.io/skfolio-accelerate/"
 Repository = "https://github.com/CarloNicolini/skfolio-accelerate"
 
 [tool.setuptools.package-dir]
@@ -55,3 +64,6 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "numpy"

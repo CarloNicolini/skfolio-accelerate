@@ -1,0 +1,6 @@
+_build/
+auto_examples/
+generated/
+sg_execution_times.rst
+*.pyc
+.DS_Store

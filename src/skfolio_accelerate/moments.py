@@ -125,6 +125,26 @@ def _finish_moments(
 def empirical_from_window(
     window: NDArray[np.float64], *, keep_returns: bool, ddof: int = 1
 ) -> FoldMoments:
+    """Empirical mean and covariance from an explicit training window.
+
+    Parameters
+    ----------
+    window : ndarray of shape (n_observations, n_assets)
+        Training returns.
+
+    keep_returns : bool
+        If ``True``, store ``window`` on the returned :class:`FoldMoments` for
+        scenario-based risks.
+
+    ddof : int, default=1
+        Delta degrees of freedom for the covariance (matches
+        ``numpy.cov(..., ddof=1)`` and skfolio's default empirical covariance).
+
+    Returns
+    -------
+    moments : FoldMoments
+        Mean, symmetrized covariance, optional returns, and observation count.
+    """
     t, n = window.shape
     mu = np.mean(window, axis=0)
     if n == 1:
@@ -216,6 +236,22 @@ class OverlapMomentCache:
         )
 
     def get(self, fold: FoldSpec, *, path_key: int = 0) -> FoldMoments:
+        """Return empirical moments for ``fold``, reusing prior statistics.
+
+        Parameters
+        ----------
+        fold : FoldSpec
+            Compiled train/test split.
+
+        path_key : int, default=0
+            Cache key for sliding / indexed state (typically ``fold.path_id``).
+
+        Returns
+        -------
+        moments : FoldMoments
+            Mean, covariance, and optional scenario returns for the training
+            window.
+        """
         if self._blocks is not None and fold.train_block_ids:
             return self._from_blocks(fold)
 
@@ -377,12 +413,22 @@ class OverlapMomentCache:
 
 @dataclass(slots=True)
 class PathMomentSession:
-    """Moment cache bound to one MRC asset subset or the full universe."""
+    """Moment cache bound to one MRC asset subset or the full universe.
+
+    Attributes
+    ----------
+    cache : OverlapMomentCache
+        Underlying sliding-window / CPCV-block cache.
+
+    x_work : ndarray of shape (n_observations, n_assets_work)
+        Returns used by the cache (full universe or one MRC subset).
+    """
 
     cache: OverlapMomentCache
     x_work: NDArray[np.float64]
 
     def get(self, fold: FoldSpec) -> FoldMoments:
+        """Moments for ``fold`` using ``fold.path_id`` as the cache key."""
         return self.cache.get(fold, path_key=fold.path_id)
 
 
@@ -393,7 +439,29 @@ def path_moment_session(
     keep_returns: bool,
     fold_blocks: Sequence[NDArray[np.intp]] | None = None,
 ) -> PathMomentSession:
-    """Slice MRC assets once, then reuse overlapping train-window statistics."""
+    """Slice MRC assets once, then reuse overlapping train-window statistics.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_observations, n_assets)
+        Full-universe returns.
+
+    folds : sequence of FoldSpec
+        Folds for one path batch. When the first fold carries ``asset_idx``,
+        columns are sliced once for the whole session.
+
+    keep_returns : bool
+        Forwarded to :class:`OverlapMomentCache`.
+
+    fold_blocks : sequence of ndarray, optional
+        CPCV fold blocks. Ignored for MRC asset subsets (blocks are defined on
+        the full universe and would not align after column slicing).
+
+    Returns
+    -------
+    session : PathMomentSession
+        Cache bound to the working returns matrix.
+    """
     asset_idx = folds[0].asset_idx if folds else None
     if asset_idx is None:
         x_work = X

@@ -141,6 +141,63 @@ _PORTFOLIO_ATTRS = (
 
 @dataclass
 class AccelerationReport:
+    """Diagnostics for one :func:`cross_val_predict` or :func:`grid_search` call.
+
+    Returned when ``return_report=True``. The ``backend`` field identifies which
+    execution path ran; ``fallback_reason`` explains native skfolio or
+    fit-assemble fallbacks.
+
+    Attributes
+    ----------
+    backend : str
+        Selected execution backend. One of ``"osqp"``, ``"clarabel"``,
+        ``"closed-form"``, ``"fit-assemble"``, ``"sklearn"``, or
+        ``"compact-grid"``.
+
+        * ``"osqp"`` — compact mean-variance QP.
+        * ``"clarabel"`` — compact scenario LP / QP / SOCP / exponential cone.
+        * ``"closed-form"`` — EqualWeighted, Random, or InverseVolatility.
+        * ``"fit-assemble"`` — native ``fit`` with portfolio assembly from
+          ``weights_``.
+        * ``"sklearn"`` — unmodified skfolio ``cross_val_predict``.
+        * ``"compact-grid"`` — shared compact path inside :func:`grid_search`.
+
+    n_solves : int, default=0
+        Number of fold solves (compact, closed-form, or native ``fit``).
+
+    n_prior_fits : int, default=0
+        Cold Gram / sufficient-statistic computations in the moment cache.
+
+    n_prior_updates : int, default=0
+        Rank-k sliding-window or CPCV block updates that avoided a full
+        ``X.T @ X``.
+
+    n_warm_starts : int, default=0
+        Successful OSQP / Clarabel warm starts across folds.
+
+    fallback_reason : str or None, default=None
+        Human-readable reason when the preferred compact path was not used, or
+        ``None`` when no fallback occurred.
+
+    moments_s, solve_s, eval_s, wall_s : float, default=0.0
+        Wall-clock seconds spent on moments, solves, portfolio assembly, and
+        the full call respectively.
+
+    baseline_s : float, default=0.0
+        Optional native baseline time filled by benchmark helpers.
+
+    speedup : float, default=nan
+        ``baseline_s / wall_s`` when a baseline was recorded.
+
+    Examples
+    --------
+    >>> pred, report = cross_val_predict(
+    ...     MeanRisk(), X, cv=cv, return_report=True
+    ... )  # doctest: +SKIP
+    >>> print(report.backend)  # doctest: +SKIP
+    osqp
+    """
+
     backend: BackendName | str
     n_solves: int = 0
     n_prior_fits: int = 0
@@ -195,7 +252,19 @@ class CallCapabilities:
 
 @dataclass(slots=True)
 class FoldBatchResult:
-    """Weights and accounting for one path batch (or the whole plan)."""
+    """Weights and accounting for one path batch (or the whole plan).
+
+    Attributes
+    ----------
+    weights : dict[int, ndarray of shape (n_assets,)]
+        Mapping from ``fold_id`` to portfolio weights.
+
+    moments_s, solve_s : float, default=0.0
+        Seconds spent on moments and solves.
+
+    n_solves, n_warm_starts, n_prior_fits, n_prior_updates : int, default=0
+        Accounting counters aggregated into :class:`AccelerationReport`.
+    """
 
     weights: dict[int, NDArray[np.float64]]
     moments_s: float = 0.0
@@ -221,7 +290,42 @@ def _nonzero(value: Any) -> bool:
 
 
 def blocked_reason(estimator) -> str | None:
-    """Why the compact engine cannot run this estimator, or None if it can."""
+    """Why the compact engine cannot run this estimator, or ``None`` if it can.
+
+    Compact eligibility is intentionally narrow. The engine must reproduce the
+    same boxed MeanRisk problem that skfolio builds with CVXPY. Any option that
+    would change that problem (MIP constraints, custom priors, risk limits,
+    sequential ``previous_weights``, pipelines, ...) returns a short reason
+    string instead of silently approximating.
+
+    Parameters
+    ----------
+    estimator : estimator instance
+        Portfolio optimization estimator to inspect. Closed-form types
+        (:class:`~skfolio.optimization.EqualWeighted`,
+        :class:`~skfolio.optimization.Random`,
+        :class:`~skfolio.optimization.InverseVolatility`) are accepted when
+        they use default settings. Otherwise the estimator must be
+        :class:`~skfolio.optimization.MeanRisk`.
+
+    Returns
+    -------
+    reason : str or None
+        ``None`` when the estimator is eligible for the compact OSQP / Clarabel
+        path. Otherwise a short English phrase describing the blocking option.
+
+    Notes
+    -----
+    This function only inspects the estimator object. Call-level options such
+    as ``n_jobs``, ``method``, or shuffled CV are checked by
+    :func:`compact_blocked_reason`.
+
+    See Also
+    --------
+    compact_blocked_reason
+    assemble_blocked_reason
+    classify_call
+    """
     if isinstance(estimator, Pipeline):
         return "pipelines use skfolio cross_val_predict"
     if type(estimator) in _CLOSED_FORM_TYPES:
@@ -292,7 +396,45 @@ def compact_blocked_reason(
     entry_rebalancing_params: dict | None = None,
     cv=None,
 ) -> str | None:
-    """Why this call cannot use the compact engine (estimator or call options)."""
+    """Why this call cannot use the compact engine.
+
+    Combines estimator checks from :func:`blocked_reason` with call-level
+    options that force the native skfolio path.
+
+    Parameters
+    ----------
+    estimator : estimator instance
+        Portfolio optimization estimator.
+
+    y : array-like of shape (n_observations,) or (n_observations, n_assets), optional
+        Target passed through for API compatibility. Unused by the compact gate.
+
+    method : str, default="predict"
+        Prediction method. Only ``"predict"`` is compacted.
+
+    params : dict, optional
+        Extra ``fit`` parameters. Any non-empty mapping disables compaction.
+
+    column_indices : array-like, optional
+        Per-split asset subsets outside MultipleRandomizedCV. Not compacted.
+
+    entry_rebalancing_params : dict, optional
+        Entry-rebalancing metadata. Not compacted.
+
+    cv : int, cross-validation generator or an iterable, optional
+        Splitter. Shuffled CV (``shuffle=True``) is not compacted.
+
+    Returns
+    -------
+    reason : str or None
+        ``None`` when compact OSQP / Clarabel may run; otherwise a short reason.
+
+    See Also
+    --------
+    blocked_reason
+    assemble_blocked_reason
+    classify_call
+    """
     if method != "predict":
         return "only method='predict' is compacted"
     if params:
@@ -316,7 +458,46 @@ def assemble_blocked_reason(
     n_jobs: int | None = None,
     cv=None,
 ) -> str | None:
-    """Why this call cannot fit natively and assemble from ``weights_``."""
+    """Why this call cannot fit natively and assemble from ``weights_``.
+
+    The fit-assemble path still calls the estimator's native ``fit``, then builds
+    test portfolios from ``weights_``. It skips joblib, train/test copies, and
+    ``predict()`` construction for serial ``n_jobs`` in ``{None, 1}``.
+
+    Parameters
+    ----------
+    estimator : estimator instance
+        Must be a :class:`~skfolio.optimization.BaseOptimization` (not a
+        :class:`~sklearn.pipeline.Pipeline`).
+
+    method : str, default="predict"
+        Only ``"predict"`` is assembled from weights.
+
+    params : dict, optional
+        Extra ``fit`` parameters. Any non-empty mapping disables assembly.
+
+    column_indices : array-like, optional
+        External column routing. Not assembled.
+
+    entry_rebalancing_params : dict, optional
+        Entry-rebalancing metadata. Not assembled.
+
+    n_jobs : int or None, default=None
+        Parallelism. Values other than ``None`` or ``1`` use native skfolio.
+
+    cv : int, cross-validation generator or an iterable, optional
+        Splitter. Shuffled CV is not assembled.
+
+    Returns
+    -------
+    reason : str or None
+        ``None`` when fit-assemble is allowed; otherwise a short reason.
+
+    See Also
+    --------
+    compact_blocked_reason
+    classify_call
+    """
     if method != "predict":
         return "only method='predict' is assembled from weights"
     if params:
@@ -353,7 +534,32 @@ def classify_call(
     n_jobs: int | None = None,
     cv=None,
 ) -> CallCapabilities:
-    """Map estimator + call options to compact / assemble eligibility."""
+    """Map estimator and call options to compact / assemble eligibility.
+
+    Compact and assemble gates are independent. A MeanRisk configuration may be
+    ineligible for the cone engines yet still eligible for serial native ``fit``
+    plus weight assembly.
+
+    Parameters
+    ----------
+    estimator : estimator instance
+        Portfolio optimization estimator.
+
+    y, method, params, column_indices, entry_rebalancing_params, n_jobs, cv
+        Same meaning as in :func:`cross_val_predict`.
+
+    Returns
+    -------
+    capabilities : CallCapabilities
+        Independent compact and assemble reasons. Use
+        ``capabilities.can_compact`` / ``capabilities.can_assemble``.
+
+    Examples
+    --------
+    >>> caps = classify_call(MeanRisk(), cv=cv)  # doctest: +SKIP
+    >>> caps.can_compact  # doctest: +SKIP
+    True
+    """
     return CallCapabilities(
         compact_reason=compact_blocked_reason(
             estimator,
@@ -377,6 +583,18 @@ def classify_call(
 
 
 def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
+    """Merge per-path :class:`FoldBatchResult` objects into one aggregate.
+
+    Parameters
+    ----------
+    parts : sequence of FoldBatchResult
+        Results from each MRC path batch (or a single batch for other CV kinds).
+
+    Returns
+    -------
+    merged : FoldBatchResult
+        Combined weight map and summed timing / accounting fields.
+    """
     weights: dict[int, NDArray[np.float64]] = {}
     moments_s = solve_s = 0.0
     n_solves = n_warm = n_fits = n_updates = 0
@@ -406,7 +624,34 @@ def solve_compact_folds(
     *,
     engines: EngineCache | None = None,
 ) -> FoldBatchResult:
-    """Solve one path batch with a shared moment cache and compact engine."""
+    """Solve one path batch with a shared moment cache and compact engine.
+
+    Parameters
+    ----------
+    session : PathMomentSession
+        Moment cache bound to one MRC asset subset or the full universe.
+
+    folds : sequence of FoldSpec
+        Compiled folds for this path batch.
+
+    spec : MeanRiskSpec
+        Numeric MeanRisk configuration already validated by
+        :func:`blocked_reason`.
+
+    engines : EngineCache, optional
+        Reused solver cache. When ``None``, a fresh cache is created for this
+        batch.
+
+    Returns
+    -------
+    result : FoldBatchResult
+        Fold weights keyed by ``fold_id`` plus timing and warm-start counts.
+
+    Notes
+    -----
+    The first fold of a batch is solved cold (``warm=False``). Subsequent folds
+    reuse the OSQP / Clarabel workspace when the topology is unchanged.
+    """
     engines = EngineCache(spec=spec) if engines is None else engines
     warm_before = int(getattr(engines.engine, "n_warm_starts", 0))
     weights: dict[int, NDArray[np.float64]] = {}
@@ -442,7 +687,33 @@ def closed_form_weights(
     *,
     fold_blocks: Sequence[NDArray[np.intp]] | None = None,
 ) -> FoldBatchResult:
-    """EqualWeighted / Random / InverseVolatility weights for one path batch."""
+    """EqualWeighted / Random / InverseVolatility weights for one path batch.
+
+    Parameters
+    ----------
+    X : ndarray of shape (n_observations, n_assets)
+        Asset returns (full universe).
+
+    folds : sequence of FoldSpec
+        Compiled folds for this path batch.
+
+    estimator : EqualWeighted or Random or InverseVolatility
+        Closed-form portfolio estimator.
+
+    fold_blocks : sequence of ndarray of shape (n_block,), optional
+        CPCV fold-block row indices used by InverseVolatility moment reuse.
+
+    Returns
+    -------
+    result : FoldBatchResult
+        Weight vectors of shape ``(n_assets,)`` (or the MRC subset size) keyed
+        by ``fold_id``.
+
+    Notes
+    -----
+    EqualWeighted and Random never touch the return matrix. InverseVolatility
+    reuses the same overlapping-moment cache as compact MeanRisk variance.
+    """
     inverse_vol = type(estimator) is InverseVolatility
     session = (
         path_moment_session(X, folds, keep_returns=False, fold_blocks=fold_blocks)
@@ -507,7 +778,36 @@ def fit_native_weights(
     y_arr: np.ndarray | None,
     folds: Sequence[FoldSpec],
 ) -> FoldBatchResult:
-    """Clone, native ``fit``, and collect 1-D ``weights_`` for each fold."""
+    """Clone, native ``fit``, and collect 1-D ``weights_`` for each fold.
+
+    Parameters
+    ----------
+    estimator : BaseOptimization
+        Unfitted portfolio optimizer. Each fold receives a fresh
+        :func:`~sklearn.base.clone`.
+
+    x_arr : ndarray of shape (n_observations, n_assets)
+        Contiguous float64 returns.
+
+    y_arr : ndarray of shape (n_observations,) or (n_observations, n_assets) or None
+        Optional target passed to ``fit``.
+
+    folds : sequence of FoldSpec
+        Compiled train/test splits.
+
+    Returns
+    -------
+    result : FoldBatchResult
+        One weight vector per fold. Two-dimensional ``weights_`` (efficient
+        frontiers) raise :class:`ValueError` because assembly expects a single
+        portfolio per fold.
+
+    Notes
+    -----
+    This is the shared serial path for estimators outside the compact subset
+    (HRP, risk budgeting, ratio objectives, ...). Portfolio objects are not
+    built here; see :func:`~skfolio_accelerate.scoring.assemble_prediction`.
+    """
     n_assets = int(x_arr.shape[1])
     weights: dict[int, NDArray[np.float64]] = {}
     solve_s = 0.0
@@ -632,12 +932,128 @@ def cross_val_predict(
     | Population
     | tuple[MultiPeriodPortfolio | Population, AccelerationReport]
 ):
-    """Drop-in for ``skfolio.model_selection.cross_val_predict``.
+    """Generate cross-validated portfolio predictions with amortized backends.
 
-    Call signature matches skfolio (plus ``backend`` and ``return_report``).
-    Compact OSQP/Clarabel is used only when it is equivalent to MeanRisk.
-    Closed-form estimators skip ``fit`` entirely. Other serial calls still use
-    native ``fit`` but assemble test portfolios from ``weights_``.
+    Drop-in replacement for :func:`skfolio.model_selection.cross_val_predict`.
+    The call signature matches skfolio, with two additional keyword-only
+    arguments: ``backend`` and ``return_report``.
+
+    For single-path cross-validation such as ``KFold`` or
+    :class:`~skfolio.model_selection.WalkForward`, the output is a
+    :class:`~skfolio.portfolio.MultiPeriodPortfolio`. For combinatorial or
+    multi-path splitters
+    (:class:`~skfolio.model_selection.CombinatorialPurgedCV`,
+    :class:`~skfolio.model_selection.MultipleRandomizedCV`), the output is a
+    :class:`~skfolio.population.Population` of multi-period portfolios.
+
+    Internally the call is compiled once into a
+    :class:`~skfolio_accelerate.cv_plan.CVPlan`, then executed by the first
+    eligible backend:
+
+    1. compact OSQP (variance) or Clarabel (scenario risks) for a narrow
+       :class:`~skfolio.optimization.MeanRisk` subset,
+    2. closed-form weights for default EqualWeighted / Random /
+       InverseVolatility,
+    3. native ``fit`` plus assembly from ``weights_`` for other serial
+       optimizers,
+    4. unmodified skfolio when options or estimators require it.
+
+    Parameters
+    ----------
+    estimator : BaseOptimization or Pipeline
+        Portfolio optimization estimator or pipeline whose last step is an
+        optimization estimator.
+
+    X : array-like of shape (n_observations, n_assets)
+        Price returns of the assets.
+
+    y : array-like of shape (n_observations,) or (n_observations, n_assets), optional
+        Target relative to ``X`` for estimators that support it.
+
+    cv : int, cross-validation generator or an iterable, default=None
+        Determines the cross-validation splitting strategy. Compatible with
+        sklearn splitters and skfolio's WalkForward, CombinatorialPurgedCV, and
+        MultipleRandomizedCV.
+
+    n_jobs : int, default=None
+        Number of jobs for the native skfolio fallback. The amortized paths
+        require ``n_jobs in {None, 1}``.
+
+    method : str, default="predict"
+        Invokes the given estimator method. Only ``"predict"`` is accelerated.
+
+    verbose : int, default=0
+        Verbosity level forwarded to native skfolio when used.
+
+    params : dict, optional
+        Parameters to pass to the ``fit`` method of the estimator. Any non-empty
+        mapping disables amortization.
+
+    pre_dispatch : int or str, default="2*n_jobs"
+        Controls the number of jobs dispatched during parallel execution in the
+        native fallback.
+
+    column_indices : array-like, optional
+        Column indices routing. Disables amortization when set outside the
+        MultipleRandomizedCV asset subsets already encoded in the CV plan.
+
+    portfolio_params : dict, optional
+        Parameters passed to the portfolio constructor during assembly.
+
+    entry_rebalancing_params : dict, optional
+        Entry-rebalancing metadata. Disables amortization when set.
+
+    backend : {"auto", "compact", "sklearn"}, default="auto"
+        Execution policy.
+
+        * ``"auto"`` — choose compact, closed-form, fit-assemble, or skfolio.
+        * ``"compact"`` — require the compact / closed-form path; raise if
+          ineligible.
+        * ``"sklearn"`` — always call native skfolio.
+
+    return_report : bool, default=False
+        If ``True``, also return an :class:`AccelerationReport`.
+
+    Returns
+    -------
+    predictions : MultiPeriodPortfolio or Population
+        Result of calling ``predict`` on each test fold, assembled into the
+        same container types as skfolio.
+
+    report : AccelerationReport, optional
+        Present only when ``return_report=True``.
+
+    Raises
+    ------
+    ValueError
+        If ``backend`` is unknown, or ``backend="compact"`` is requested for an
+        ineligible estimator / call.
+
+    Notes
+    -----
+    Compact numerical failure does not return an accelerator-only error when
+    fit-assemble is allowed: the call retries with native ``fit`` and the same
+    compiled CV plan. When even assembly is unavailable, the original splitter
+    deepcopy is passed to skfolio so mutable ``RandomState`` objects are not
+    double-consumed.
+
+    Examples
+    --------
+    >>> from skfolio.model_selection import WalkForward
+    >>> from skfolio.optimization import MeanRisk
+    >>> from skfolio_accelerate import cross_val_predict
+    >>> cv = WalkForward(train_size=252, test_size=21)  # doctest: +SKIP
+    >>> prediction = cross_val_predict(MeanRisk(), X, cv=cv)  # doctest: +SKIP
+    >>> prediction, report = cross_val_predict(
+    ...     MeanRisk(), X, cv=cv, return_report=True
+    ... )  # doctest: +SKIP
+    >>> print(report.backend)  # doctest: +SKIP
+    osqp
+
+    See Also
+    --------
+    grid_search : Compact MeanRisk hyperparameter search.
+    classify_call : Inspect compact / assemble eligibility without running.
     """
     _cap_native_threads()
     t_wall = time.perf_counter()
