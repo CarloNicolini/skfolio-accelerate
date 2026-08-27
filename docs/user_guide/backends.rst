@@ -16,6 +16,7 @@ Backend names
 =================  ============================================================
 ``osqp``           Compact mean-variance QP
 ``clarabel``       Compact scenario LP / QP / SOCP / exponential cone
+``cosmo``          Optional COSMO.jl ADMM engine (variance or scenario)
 ``closed-form``    EqualWeighted, Random, or InverseVolatility weights
 ``fit-assemble``   Native ``fit`` + assembly from ``weights_``
 ``sklearn``        Unmodified skfolio ``cross_val_predict``
@@ -60,6 +61,24 @@ Inspect gates without running a backtest:
 
 Compact and assemble are independent. A MeanRisk configuration may be
 ineligible for the cone engines yet still eligible for serial fit-assemble.
+
+Optional COSMO backend
+**********************
+
+Pass ``MeanRisk(solver="COSMO")`` to use COSMO.jl instead of OSQP / Clarabel
+on the compact subset. The Julia runtime is started once per process and the
+ADMM workspace is reused across folds of one :func:`cross_val_predict` call.
+Default ``MeanRisk()`` is unchanged.
+
+See :ref:`install` for the optional ``[cosmo]`` extra. If COSMO is requested
+but juliacall / COSMO.jl are missing, compaction is skipped rather than
+failing at import time.
+
+COSMO is an ADMM solver. Variance, CVaR, and second-order cones typically
+match the Clarabel / OSQP weights to the compact test gates. Scenario LPs
+(MAD) and exponential cones (EVaR) use COSMO's default ``1e-5`` residuals
+and can differ from Clarabel at the ``1e-3`` to ``1e-2`` level; they stay
+opt-in so those results can be measured rather than made the default.
 
 .. danger::
 

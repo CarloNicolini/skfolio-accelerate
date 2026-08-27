@@ -1,3 +1,5 @@
+.. _install:
+
 ************
 Installation
 ************
@@ -39,3 +41,19 @@ Runtime:
 
 NumPy, SciPy, Clarabel, pandas, and scikit-learn come from skfolio's own
 runtime stack.
+
+Optional COSMO extra
+********************
+
+``MeanRisk(solver="COSMO")`` uses COSMO.jl as a compact ADMM engine. This is
+opt-in; the default compact path remains OSQP (variance) and Clarabel
+(scenario risks). Install Julia, then:
+
+.. code:: console
+
+    $ pip install -e ".[cosmo]"
+    $ julia -e 'using Pkg; Pkg.add("COSMO")'
+
+``juliacall`` starts a process-local Julia runtime on first use and installs
+``COSMO.jl`` into that environment (declared in ``juliapkg.json``). Missing
+COSMO does not affect ``import skfolio_accelerate`` or the default backends.

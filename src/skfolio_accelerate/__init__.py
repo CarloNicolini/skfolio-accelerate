@@ -7,7 +7,7 @@ replacement for :func:`skfolio.model_selection.cross_val_predict`.
 A call is compiled once into a :class:`~skfolio_accelerate.cv_plan.CVPlan`, then
 executed by one of several backends:
 
-* compact OSQP / Clarabel engines for a subset of
+* compact OSQP / Clarabel engines (optional COSMO.jl) for a subset of
   :class:`~skfolio.optimization.MeanRisk`,
 * closed-form weights for default
   :class:`~skfolio.optimization.EqualWeighted`,

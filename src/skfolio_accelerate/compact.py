@@ -1,7 +1,9 @@
 """Direct MeanRisk QP, LP, SOCP, and exponential-cone engines.
 
 These engines reproduce skfolio's boxed MeanRisk problem for the compact
-subset, bypassing CVXPY. They are not a general cone-solver layer.
+subset, bypassing CVXPY. They are not a general cone-solver layer. Variance
+defaults to OSQP; scenario risks default to Clarabel. ``MeanRisk(solver="COSMO")``
+selects the optional COSMO.jl ADMM engines when the runtime is installed.
 
 Equivalence with skfolio (see ``ConvexOptimization`` in skfolio 1.0):
 
@@ -179,14 +181,19 @@ class MeanRiskSpec:
     min_weights: Any
     max_weights: Any
     budget: float
+    solver: str = "CLARABEL"
 
     def needs_returns(self) -> bool:
         """``True`` when the risk measure consumes scenario returns."""
         return self.risk_measure is not RiskMeasure.VARIANCE
 
+    def uses_cosmo(self) -> bool:
+        """``True`` when this spec should dispatch to the COSMO compact engines."""
+        return self.solver == "COSMO"
+
 
 class CompactEngine(Protocol):
-    """Protocol for OSQP / Clarabel engines that solve one fold from moments."""
+    """Protocol for OSQP / Clarabel / COSMO engines that solve one fold from moments."""
 
     n_warm_starts: int
 
@@ -233,6 +240,7 @@ def estimator_spec(estimator) -> MeanRiskSpec:
         min_weights=getattr(estimator, "min_weights", 0.0),
         max_weights=getattr(estimator, "max_weights", 1.0),
         budget=float(getattr(estimator, "budget", 1.0) or 1.0),
+        solver=str(getattr(estimator, "solver", "CLARABEL") or "CLARABEL"),
     )
 
 
@@ -253,6 +261,7 @@ class MinVarianceOSQP:
         self._y: NDArray[np.float64] | None = None
         self._p_dense = np.empty((n_assets, n_assets), dtype=np.float64)
         self.n_warm_starts = 0
+        self.last_iterations = 0
         self._build()
 
     def _build(self) -> None:
@@ -342,6 +351,7 @@ class MinVarianceOSQP:
                 raise RuntimeError(f"OSQP failed: {result.info.status}")
         self._x = np.asarray(result.x, dtype=np.float64)
         self._y = np.asarray(result.y, dtype=np.float64)
+        self.last_iterations = int(getattr(result.info, "iter", 0) or 0)
         return self._x.copy()
 
 
@@ -369,6 +379,7 @@ class CVaRClarabel:
         self._b: NDArray[np.float64] | None = None
         self._x: NDArray[np.float64] | None = None
         self.n_warm_starts = 0
+        self.last_iterations = 0
         self._build_pattern()
 
     def _c(self) -> float:
@@ -486,6 +497,9 @@ class CVaRClarabel:
         if "solved" not in status:
             raise RuntimeError(f"Clarabel CVaR failed: {solution.status}")
         self._x = np.asarray(solution.x, dtype=np.float64)
+        self.last_iterations = int(
+            getattr(solution, "iterations", getattr(solution, "iter", 0)) or 0
+        )
         return self._x[: self.n_assets].copy()
 
 
@@ -566,6 +580,7 @@ class ScenarioClarabel:
         self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
         self.n_warm_starts = 0
+        self.last_iterations = 0
 
     def _risk_scale(self) -> float:
         if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
@@ -913,13 +928,16 @@ class ScenarioClarabel:
             raise RuntimeError(
                 f"Clarabel {self.spec.risk_measure.name} failed: {solution.status}"
             )
+        self.last_iterations = int(
+            getattr(solution, "iterations", getattr(solution, "iter", 0)) or 0
+        )
         return np.asarray(solution.x[: self.n_assets], dtype=np.float64)
 
 
 def make_compact_engine(
     spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None
 ) -> CompactEngine:
-    """Construct the OSQP or Clarabel engine for ``spec``.
+    """Construct the OSQP, Clarabel, or COSMO engine for ``spec``.
 
     Parameters
     ----------
@@ -936,8 +954,9 @@ def make_compact_engine(
     Returns
     -------
     engine : CompactEngine
-        :class:`MinVarianceOSQP`, :class:`CVaRClarabel`, or
-        :class:`ScenarioClarabel`.
+        :class:`MinVarianceOSQP`, :class:`CVaRClarabel`,
+        :class:`ScenarioClarabel`, or a COSMO engine when
+        ``spec.solver == "COSMO"``.
 
     Raises
     ------
@@ -946,6 +965,12 @@ def make_compact_engine(
         a scenario risk.
     """
     risk = spec.risk_measure
+    if spec.uses_cosmo():
+        if risk is not RiskMeasure.VARIANCE and risk not in _SCENARIO_RISKS:
+            raise ValueError(f"Unsupported risk_measure {risk}")
+        from skfolio_accelerate._cosmo import make_cosmo_engine
+
+        return make_cosmo_engine(spec, n_assets=n_assets, n_observations=n_observations)
     if risk is RiskMeasure.VARIANCE:
         return MinVarianceOSQP(spec, n_assets)
     if risk not in _SCENARIO_RISKS:

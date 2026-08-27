@@ -165,10 +165,11 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
 
     for path_index, folds in enumerate(cv_plan.path_batches()):
         if path_index:
-            # Clarabel has no explicit cold-start reset. Keep OSQP workspaces
-            # across MRC paths, but rebuild scenario engines at path boundaries.
+            # Clarabel has no explicit cold-start reset. Keep OSQP / COSMO
+            # workspaces across MRC paths, but rebuild Clarabel scenario engines
+            # at path boundaries.
             for candidate_id, spec in enumerate(specs):
-                if spec.needs_returns():
+                if spec.needs_returns() and not spec.uses_cosmo():
                     engines[candidate_id] = EngineCache(spec=spec)
         session = path_moment_session(
             x_arr,

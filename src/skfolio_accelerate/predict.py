@@ -6,7 +6,7 @@ A call is classified once, then executed as:
     → backend (compact / closed-form / fit-assemble / native)
     → fold weights → assembled Portfolio objects
 
-Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. EqualWeighted,
+Compact OSQP/Clarabel/COSMO kernels accelerate a subset of MeanRisk. EqualWeighted,
 Random, and default InverseVolatility use closed-form weights. Remaining
 serial estimators still call native ``fit``, then assemble test portfolios
 from ``weights_`` so they skip joblib, train/test copies, and ``predict()``.
@@ -56,6 +56,7 @@ from skfolio_accelerate.scoring import assemble_prediction, window_view
 BackendName = Literal[
     "osqp",
     "clarabel",
+    "cosmo",
     "closed-form",
     "fit-assemble",
     "sklearn",
@@ -151,11 +152,12 @@ class AccelerationReport:
     ----------
     backend : str
         Selected execution backend. One of ``"osqp"``, ``"clarabel"``,
-        ``"closed-form"``, ``"fit-assemble"``, ``"sklearn"``, or
+        ``"cosmo"``, ``"closed-form"``, ``"fit-assemble"``, ``"sklearn"``, or
         ``"compact-grid"``.
 
         * ``"osqp"`` — compact mean-variance QP.
         * ``"clarabel"`` — compact scenario LP / QP / SOCP / exponential cone.
+        * ``"cosmo"`` — optional COSMO.jl ADMM engine (variance or scenario).
         * ``"closed-form"`` — EqualWeighted, Random, or InverseVolatility.
         * ``"fit-assemble"`` — native ``fit`` with portfolio assembly from
           ``weights_``.
@@ -173,7 +175,7 @@ class AccelerationReport:
         ``X.T @ X``.
 
     n_warm_starts : int, default=0
-        Successful OSQP / Clarabel warm starts across folds.
+        Successful OSQP / Clarabel / COSMO warm starts across folds.
 
     fallback_reason : str or None, default=None
         Human-readable reason when the preferred compact path was not used, or
@@ -312,7 +314,8 @@ def blocked_reason(estimator) -> str | None:
     -------
     reason : str or None
         ``None`` when the estimator is eligible for the compact OSQP / Clarabel
-        path. Otherwise a short English phrase describing the blocking option.
+        / COSMO path. Otherwise a short English phrase describing the blocking
+        option.
 
     Notes
     -----
@@ -358,7 +361,12 @@ def blocked_reason(estimator) -> str | None:
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
     solver = getattr(estimator, "solver", "CLARABEL")
-    if risk is RiskMeasure.VARIANCE:
+    if solver == "COSMO":
+        from skfolio_accelerate._cosmo import cosmo_available
+
+        if not cosmo_available():
+            return "COSMO runtime is not installed"
+    elif risk is RiskMeasure.VARIANCE:
         if solver not in {"CLARABEL", "OSQP"}:
             return f"solver {solver!r} is not compacted for {risk.name}"
     elif solver != "CLARABEL":
@@ -427,7 +435,8 @@ def compact_blocked_reason(
     Returns
     -------
     reason : str or None
-        ``None`` when compact OSQP / Clarabel may run; otherwise a short reason.
+        ``None`` when compact OSQP / Clarabel / COSMO may run; otherwise a short
+        reason.
 
     See Also
     --------
@@ -1144,13 +1153,14 @@ def cross_val_predict(
     if capabilities.can_compact:
         spec = estimator_spec(estimator)
         keep_returns = spec.needs_returns()
-        # MRC paths have the same number of assets. Reuse one OSQP topology across
-        # paths, while deliberately disabling the first warm start of each path.
-        # Clarabel workspaces are not shared across paths: there is no supported
-        # cold-start reset, so a leftover interior point can leak between subsets.
+        # MRC paths have the same number of assets. Reuse one OSQP / COSMO
+        # topology across paths, while deliberately disabling the first warm
+        # start of each path. Clarabel workspaces are not shared across paths:
+        # there is no supported cold-start reset, so a leftover interior point
+        # can leak between subsets.
         shared_engines = (
             EngineCache(spec=spec)
-            if cv_plan.kind == "mrc" and not spec.needs_returns()
+            if cv_plan.kind == "mrc" and (not spec.needs_returns() or spec.uses_cosmo())
             else None
         )
         try:
@@ -1222,7 +1232,9 @@ def cross_val_predict(
             portfolio_params=portfolio_params,
         )
         backend_name: BackendName = (
-            "osqp" if spec.risk_measure is RiskMeasure.VARIANCE else "clarabel"
+            "cosmo"
+            if spec.uses_cosmo()
+            else ("osqp" if spec.risk_measure is RiskMeasure.VARIANCE else "clarabel")
         )
         report = _report_from_batch(
             backend_name,

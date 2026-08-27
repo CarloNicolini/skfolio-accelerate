@@ -89,7 +89,7 @@ prediction, report = cross_val_predict(
     cv=cv,
     return_report=True,
 )
-print(report.backend)  # "osqp", "clarabel", "closed-form", "fit-assemble", or "sklearn"
+print(report.backend)  # "osqp", "clarabel", "cosmo", "closed-form", "fit-assemble", or "sklearn"
 ```
 
 `"sklearn"` means native skfolio was used. The report explains why. If a
@@ -228,13 +228,23 @@ every pull request and publishes them to GitHub Pages from `main`.
 
 The package targets skfolio 1.x. Its only additional runtime dependency is
 OSQP; NumPy, SciPy, Clarabel, and scikit-learn come from skfolio's own runtime
-stack.
+stack. COSMO.jl is an optional ADMM backend (``MeanRisk(solver="COSMO")``) and
+is not required for the default OSQP / Clarabel path.
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pytest
+```
+
+To exercise the COSMO engines, install the optional extra (Julia is installed
+by juliacall on first use if needed):
+
+```bash
+pip install -e ".[dev,cosmo]"
+pytest tests/test_cosmo.py
+PYTHONPATH=src python benchmarks/benchmark_cosmo.py
 ```
 
 ## Automation and releases

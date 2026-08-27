@@ -12,7 +12,7 @@ license = { text = "BSD-3-Clause" }
 authors = [
   { name = "skfolio-accelerate contributors" },
 ]
-keywords = ["skfolio", "portfolio", "cross-validation", "osqp", "clarabel"]
+keywords = ["skfolio", "portfolio", "cross-validation", "osqp", "clarabel", "cosmo"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "License :: OSI Approved :: BSD License",
@@ -24,6 +24,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+cosmo = [
+  "juliacall>=0.9",
+]
 dev = [
   "psutil>=7.2.2",
   "pytest>=8.0",
@@ -49,13 +52,14 @@ Repository = "https://github.com/CarloNicolini/skfolio-accelerate"
 where = ["src"]
 
 [tool.setuptools.package-data]
-skfolio_accelerate = ["py.typed"]
+skfolio_accelerate = ["py.typed", "julia/*.jl", "juliapkg.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib"]
 markers = [
   "slow: longer correctness / timing experiments",
+  "cosmo: tests that require Julia and COSMO.jl",
 ]
 
 [tool.ruff]

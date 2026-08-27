@@ -206,6 +206,24 @@ Functions
     estimator_spec
     make_compact_engine
 
+.. currentmodule:: skfolio_accelerate._cosmo
+
+.. autosummary::
+    :nosignatures:
+    :toctree: generated/
+    :template: class.rst
+
+    MinVarianceCOSMO
+    CVaRCOSMO
+    ScenarioCOSMO
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    cosmo_available
+    make_cosmo_engine
+
 .. _flagship_ref:
 
 :mod:`skfolio_accelerate.flagship`: Benchmark workloads
