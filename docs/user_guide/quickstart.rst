@@ -39,14 +39,11 @@ Pass ``return_report=True`` to learn which path ran:
         cv=cv,
         return_report=True,
     )
-    print(report.backend)
+    print(report.backend)  # "osqp", "clarabel", "cvxpy-sequential", ...
     print(report.reason)
     print(report)
 
-Leave ``backend`` at its default. ``"auto"`` selects compact OSQP / Clarabel
-when the boxed problem applies, Parameterized CVXPY reuse for other MeanRisk
-configurations, then fit-assemble or native skfolio. Read ``report.reason``
-to see why.
+See :ref:`backends` for the full list of backends and eligibility rules.
 
 What is accelerated
 *******************
@@ -64,8 +61,7 @@ The fast path applies to:
 
 Other serial :class:`~skfolio.optimization.BaseOptimization` estimators still
 call native ``fit``, then assemble portfolios from ``weights_``. MeanRisk
-configurations outside the boxed compact subset (ratio objectives, risk
-limits, linear constraints, transaction costs, Gini, Ulcer, standard
-deviation, ...) reuse the original CVXPY problem across folds when the
-shape is unchanged. Pipelines, ``raise_on_failure=False``, parallel
-``n_jobs``, and ``entry_rebalancing_params`` use unmodified skfolio.
+configurations outside the boxed compact subset reuse the original CVXPY
+problem across folds when the training shape is fixed. Pipelines,
+``raise_on_failure=False``, parallel ``n_jobs``, and
+``entry_rebalancing_params`` use unmodified skfolio.

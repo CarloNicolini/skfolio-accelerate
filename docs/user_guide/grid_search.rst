@@ -6,12 +6,10 @@ Hyperparameter search
 
 .. currentmodule:: skfolio_accelerate
 
-:func:`grid_search` evaluates a MeanRisk parameter grid with one shared
-CV plan. Compact-eligible candidates reuse OSQP / Clarabel and empirical
-moments. Other MeanRisk candidates (ratio objectives, ``max_cvar``,
-``linear_constraints``, ...) reuse Parameterized CVXPY problems. Candidates
-are scored by mean out-of-sample path Sharpe computed from fold weights.
-Only the winning parameter set is materialized into Portfolio objects.
+:func:`grid_search` evaluates a compact MeanRisk parameter grid with one shared
+CV plan and one shared moment pass. Candidates are scored by mean out-of-sample
+path Sharpe computed from fold weights. Only the winning parameter set is
+materialized into Portfolio objects.
 
 .. code-block:: python
 
@@ -29,12 +27,8 @@ Only the winning parameter set is materialized into Portfolio objects.
     print(result.best_score_)
     prediction = result.best_prediction_
 
-Every compact-eligible candidate stays on that engine. MeanRisk grids that
-leave the boxed subset use the sequential CVXPY backend instead. For
-non-MeanRisk estimators use skfolio's ``OnlineGridSearch`` or sklearn's
-``GridSearchCV``.
+Every candidate must be compact-eligible. For general estimators use skfolio's
+``OnlineGridSearch`` or sklearn's ``GridSearchCV``.
 
 The returned :class:`GridSearchResult` also carries
-``acceleration_report_`` with backend ``"compact-grid"`` or
-``"sequential-grid"``. The search selects that engine; you do not pass a
-backend name.
+``acceleration_report_`` with backend ``"compact-grid"``.

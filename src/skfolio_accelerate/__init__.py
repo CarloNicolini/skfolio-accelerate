@@ -9,7 +9,8 @@ executed by one of several backends:
 
 * compact OSQP / Clarabel engines for a subset of
   :class:`~skfolio.optimization.MeanRisk`,
-* Parameterized CVXPY reuse for other MeanRisk configurations,
+* Parameterized reuse of skfolio's MeanRisk CVXPY problem when extra
+  constraints keep a fixed training shape,
 * closed-form weights for default
   :class:`~skfolio.optimization.EqualWeighted`,
   :class:`~skfolio.optimization.Random`, and
@@ -30,7 +31,6 @@ Examples
 
 from skfolio_accelerate.predict import (
     AccelerationReport,
-    classify_call,
     cross_val_predict,
     massive_cross_val_predict,
 )
@@ -44,7 +44,6 @@ from skfolio_accelerate.search import GridSearchResult, grid_search
 __all__ = [
     "AccelerationReport",
     "GridSearchResult",
-    "classify_call",
     "cross_val_predict",
     "grid_search",
     "massive_cross_val_predict",

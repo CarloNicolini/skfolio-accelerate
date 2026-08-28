@@ -188,25 +188,12 @@ def test_cpcv_grid_search_matches_repeated_predict():
     )
 
 
-def test_grid_search_max_variance_uses_sequential_backend():
+def test_grid_search_rejects_options_not_in_compact_problem():
     X = synthetic_returns(48, 5, seed=20)
     cv = WalkForward(train_size=24, test_size=8)
-    result = grid_search(
-        MeanRisk(max_variance=1.0),
-        X,
-        {"l2_coef": [0.0, 1e-2]},
-        cv=cv,
-    )
-    assert result.acceleration_report_.backend == "sequential-grid"
-    assert np.isfinite(result.best_score_)
-
-
-def test_grid_search_rejects_custom_constraint_hooks():
-    X = synthetic_returns(48, 5, seed=20)
-    cv = WalkForward(train_size=24, test_size=8)
-    with np.testing.assert_raises_regex(ValueError, "add_constraints"):
+    with np.testing.assert_raises_regex(ValueError, "maximum variance"):
         grid_search(
-            MeanRisk(add_constraints=lambda w: [w[0] >= 0]),
+            MeanRisk(max_variance=1.0),
             X,
             {"l2_coef": [0.0, 1e-2]},
             cv=cv,

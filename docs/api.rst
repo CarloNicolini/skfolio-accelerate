@@ -52,7 +52,6 @@ Functions
     :template: function.rst
 
     cross_val_predict
-    classify_call
 
 .. currentmodule:: skfolio_accelerate.predict
 
@@ -60,8 +59,7 @@ Functions
     :toctree: generated/
     :template: function.rst
 
-    resolve_backend
-    compact_engine_name
+    classify_call
     blocked_reason
     compact_blocked_reason
     sequential_blocked_reason
@@ -151,7 +149,6 @@ Functions
 
     compile_cv_plan
     cpcv_fold_blocks
-    chains_previous_weights
 
 .. _moments_ref:
 
@@ -210,36 +207,6 @@ Functions
 
     estimator_spec
     make_compact_engine
-
-.. _mean_risk_problem_ref:
-
-:mod:`skfolio_accelerate.mean_risk_problem`: Sequential MeanRisk
-================================================================
-
-.. automodule:: skfolio_accelerate.mean_risk_problem
-    :no-members:
-    :no-inherited-members:
-
-.. currentmodule:: skfolio_accelerate.mean_risk_problem
-
-.. autosummary::
-    :nosignatures:
-    :toctree: generated/
-    :template: class.rst
-
-    ParametricMeanRisk
-    SequentialProblemCache
-    ProblemTopology
-    CompiledProblem
-
-.. autosummary::
-    :toctree: generated/
-    :template: function.rst
-
-    as_parametric
-    problem_topology
-    needs_observation_dimension
-    can_reuse_distribution
 
 .. _flagship_ref:
 

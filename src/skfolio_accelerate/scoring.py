@@ -381,13 +381,6 @@ def make_segment_portfolio(
     )
 
 
-def _merged_segment_params(segment_params, fold_segment_params, fold_id: int) -> dict:
-    extra = {} if segment_params is None else dict(segment_params)
-    if fold_segment_params:
-        extra.update(fold_segment_params.get(fold_id, {}))
-    return extra
-
-
 def assemble_prediction(
     X,
     cv_plan: CVPlan,
@@ -396,7 +389,6 @@ def assemble_prediction(
     name: str = "MeanRisk",
     portfolio_params: dict | None = None,
     segment_params: dict | None = None,
-    fold_segment_params: dict[int, dict] | None = None,
 ) -> MultiPeriodPortfolio | Population:
     """Build a skfolio MultiPeriodPortfolio or Population from fold weights.
 
@@ -422,11 +414,6 @@ def assemble_prediction(
     segment_params : dict, optional
         Parameters forwarded to each segment
         :class:`~skfolio.portfolio.Portfolio`.
-
-    fold_segment_params : dict[int, dict], optional
-        Per-``fold_id`` overrides merged on top of ``segment_params``. Used to
-        stamp the ``previous_weights`` that were in force when that fold was
-        solved (transaction costs, turnover).
 
     Returns
     -------
@@ -462,9 +449,7 @@ def assemble_prediction(
                         fold.asset_idx,
                         name=name,
                         x_np=x_np,
-                        segment_params=_merged_segment_params(
-                            segment_params, fold_segment_params, fold.fold_id
-                        ),
+                        segment_params=segment_params,
                     )
                 )
         pop_name = extra.pop("name", "path")
@@ -492,9 +477,7 @@ def assemble_prediction(
             fold.asset_idx,
             name=name,
             x_np=x_np,
-            segment_params=_merged_segment_params(
-                segment_params, fold_segment_params, fold.fold_id
-            ),
+            segment_params=segment_params,
         )
         for fold in ordered
         if fold.test_idx.size

@@ -72,11 +72,11 @@ non-compounded recurrence.
 
 Other serial estimators still call native `fit` so the original problem is
 unchanged, then assemble test portfolios from `weights_`. MeanRisk options
-outside that boxed subset (ratio objectives, risk limits, linear constraints,
-transaction costs, standard deviation, Gini, Ulcer, ...) reuse skfolio's own
-CVXPY problem across folds when the training shape is fixed. Pipelines,
-`raise_on_failure=False`, parallel `n_jobs`, and `entry_rebalancing_params`
-still run through skfolio unchanged.
+outside the boxed subset (risk limits, linear constraints, Gini, Ulcer,
+standard deviation, ...) reuse skfolio's own CVXPY problem across folds when
+the training window shape is fixed. Ratio homogenization, transaction costs,
+custom CVXPY hooks, pipelines, and MeanRisk subclasses stay on fit-assemble
+or native skfolio.
 
 This boundary is intentional. Reusing mutable estimator or solver state without
 proving equivalence could silently solve a different investment problem.

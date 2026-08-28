@@ -31,7 +31,6 @@ _, mean_risk_report = cross_val_predict(
     return_report=True,
 )
 print("MeanRisk backend:", mean_risk_report.backend)
-print("MeanRisk reason:", mean_risk_report.reason)
 
 # %%
 # EqualWeighted uses closed-form weights
@@ -43,5 +42,4 @@ _, equal_report = cross_val_predict(
     return_report=True,
 )
 print("EqualWeighted backend:", equal_report.backend)
-print("EqualWeighted reason:", equal_report.reason)
 print(equal_report)
