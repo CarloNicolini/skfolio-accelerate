@@ -96,6 +96,10 @@ benchmark/results/YYYY-MM-DD_<git-short-sha>/
     figures/
 ```
 
+The first committed snapshot used `--quick` (synthetic 120×6, last 252 S&P 500
+return rows, WalkForward, one timed repetition after one warm-up). Re-run
+without `--quick` (or with `--full`) for publication-scale windows.
+
 Latest Plotly HTML/JSON copies are also placed in `benchmark/figures/`.
 
 The summary table columns are:
