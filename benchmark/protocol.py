@@ -156,12 +156,9 @@ def validate_prediction(
     n_nonfinite_w = sum(int(np.size(w) - np.isfinite(w).sum()) for w in weights)
     n_failed = 0
     status = "ok"
-    if report is not None and getattr(report, "fallback_reason", None):
-        status = "ok_with_fallback"
-    if n_invalid or n_nonfinite_w:
+    if n_invalid or n_nonfinite_w or prediction is None:
         status = "invalid_output"
     if prediction is None:
-        status = "invalid_output"
         n_failed = 1
     max_abs_w = float("nan")
     max_abs_sharpe = float("nan")
@@ -181,9 +178,9 @@ def validate_prediction(
     solver_status = "unknown"
     if report is not None:
         solver_status = str(report.backend)
-        if report.fallback_reason:
-            solver_status = f"{report.backend}:fallback"
-    validation_ok = status in {"ok", "ok_with_fallback"} and n_invalid == 0
+        if report.fallback_reason and report.backend in {"sklearn", "fit-assemble"}:
+            solver_status = f"{report.backend}:{report.fallback_reason}"
+    validation_ok = status == "ok"
     return {
         "mean_sharpe": nanmean(sharpes),
         "n_failed_folds": n_failed,
@@ -193,7 +190,7 @@ def validate_prediction(
         "max_abs_sharpe_diff": max_abs_sharpe,
         "solver_status": solver_status,
         "validation_ok": validation_ok,
-        "status": status if validation_ok or status != "ok" else status,
+        "status": status,
     }
 
 
