@@ -21,6 +21,8 @@ result with Plotly.
 from time import perf_counter
 
 import plotly.graph_objects as go
+import plotly.io as pio
+from plotly.io import show
 from skfolio.model_selection import WalkForward
 from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predict
 from skfolio.optimization import MeanRisk
@@ -28,7 +30,7 @@ from skfolio.optimization import MeanRisk
 from skfolio_accelerate import cross_val_predict
 from skfolio_accelerate.flagship import factor_returns
 
-X = factor_returns(n_observations=504, n_assets=8, seed=7)
+X = factor_returns(n_obs=504, n_assets=8, seed=7)
 cv = WalkForward(train_size=126, test_size=21)
 
 # %%
@@ -55,7 +57,9 @@ accelerated_s = _median_seconds(
     lambda: cross_val_predict(MeanRisk(), X, cv=cv, n_jobs=1)
 )
 speedup = native_s / accelerated_s if accelerated_s > 0 else float("nan")
-print(f"native={native_s:.4f}s  accelerated={accelerated_s:.4f}s  speedup={speedup:.2f}x")
+print(
+    f"native={native_s:.4f}s  accelerated={accelerated_s:.4f}s  speedup={speedup:.2f}x"
+)
 
 # %%
 # Plotly bar chart of the measured wall times
@@ -74,8 +78,7 @@ fig = go.Figure(
 )
 fig.update_layout(
     title=(
-        f"WalkForward MeanRisk variance — median of 3 runs "
-        f"({speedup:.1f}× speedup)"
+        f"WalkForward MeanRisk variance — median of 3 runs ({speedup:.1f}× speedup)"
     ),
     yaxis_title="seconds",
     template="plotly_white",
@@ -83,4 +86,6 @@ fig.update_layout(
     margin=dict(t=60, r=20, b=40, l=60),
     height=420,
 )
-fig
+# ``show`` writes HTML+PNG for Sphinx-Gallery; skip interactive backends locally.
+if "sphinx_gallery" in str(pio.renderers.default):
+    show(fig)

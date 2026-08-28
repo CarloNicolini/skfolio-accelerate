@@ -9,8 +9,6 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
-from sphinx_gallery.sorting import FileNameSortKey
-
 # -- Path setup ----------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -41,6 +39,9 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 default_role = "literal"
 add_function_parentheses = False
+# FileNameSortKey (and similar callables) in sphinx_gallery_conf are not
+# pickleable; ignore the resulting environment-cache warning under -W.
+suppress_warnings = ["config.cache"]
 
 # -- Autodoc / autosummary / numpydoc ------------------------------------------
 autosummary_generate = True
@@ -91,11 +92,14 @@ html_context = {
 try:
     import plotly.io as pio
     from plotly.io._sg_scraper import plotly_sg_scraper
+    from sphinx_gallery.sorting import FileNameSortKey
 
     pio.renderers.default = "sphinx_gallery_png"
     _image_scrapers = ("matplotlib", plotly_sg_scraper)
+    _subsection_order = FileNameSortKey
 except ImportError:  # pragma: no cover - docs extra missing plotly
     _image_scrapers = ("matplotlib",)
+    _subsection_order = None
 
 # -- Sphinx-Gallery ------------------------------------------------------------
 sphinx_gallery_conf = {
@@ -110,8 +114,9 @@ sphinx_gallery_conf = {
     "reference_url": {"skfolio_accelerate": None},
     "backreferences_dir": "generated/backreferences",
     "image_scrapers": _image_scrapers,
-    "within_subsection_order": FileNameSortKey,
 }
+if _subsection_order is not None:
+    sphinx_gallery_conf["within_subsection_order"] = _subsection_order
 
 # Local/optional fast builds can skip executing examples. Continuous
 # integration always executes the gallery (including Plotly speedup figures).

@@ -22,6 +22,8 @@ Two Plotly views of accelerator speedups:
 from time import perf_counter
 
 import plotly.graph_objects as go
+import plotly.io as pio
+from plotly.io import show
 from plotly.subplots import make_subplots
 from skfolio import RiskMeasure
 from skfolio.model_selection import WalkForward
@@ -31,7 +33,7 @@ from skfolio.optimization import MeanRisk
 from skfolio_accelerate import cross_val_predict
 from skfolio_accelerate.flagship import factor_returns
 
-X = factor_returns(n_observations=378, n_assets=6, seed=11)
+X = factor_returns(n_obs=378, n_assets=6, seed=11)
 cv = WalkForward(train_size=126, test_size=21)
 risks = [
     ("Variance", RiskMeasure.VARIANCE),
@@ -67,7 +69,10 @@ for label, risk in risks:
     live_native.append(native_s)
     live_accel.append(accel_s)
     live_speedup.append(native_s / accel_s if accel_s > 0 else float("nan"))
-    print(f"{label}: native={native_s:.4f}s  accel={accel_s:.4f}s  ×{live_speedup[-1]:.2f}")
+    print(
+        f"{label}: native={native_s:.4f}s  accel={accel_s:.4f}s  "
+        f"×{live_speedup[-1]:.2f}"
+    )
 
 # %%
 # Published long-workload WalkForward factors
@@ -154,4 +159,6 @@ fig.update_layout(
     legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
     margin=dict(t=100, r=20, b=40, l=60),
 )
-fig
+# ``show`` writes HTML+PNG for Sphinx-Gallery; skip interactive backends locally.
+if "sphinx_gallery" in str(pio.renderers.default):
+    show(fig)
