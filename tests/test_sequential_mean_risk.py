@@ -8,12 +8,17 @@ import pytest
 from skfolio import RiskMeasure
 from skfolio.model_selection import WalkForward
 from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
-from skfolio.optimization import MeanRisk, ObjectiveFunction
+from skfolio.optimization import EqualWeighted, MeanRisk, ObjectiveFunction
 from sklearn.model_selection import TimeSeriesSplit
 
-from skfolio_accelerate import cross_val_predict, grid_search, path_sharpes
+from skfolio_accelerate import (
+    classify_call,
+    cross_val_predict,
+    grid_search,
+    path_sharpes,
+)
 from skfolio_accelerate.mean_risk_problem import ParametricMeanRisk
-from skfolio_accelerate.predict import sequential_blocked_reason
+from skfolio_accelerate.predict import resolve_backend, sequential_blocked_reason
 from tests.helpers import synthetic_returns
 
 _NON_ANNUALIZED = [rm for rm in RiskMeasure if not rm.is_annualized]
@@ -184,6 +189,72 @@ def test_mean_risk_subclasses_are_not_parameterized():
     assert "MaximumDiversification" in reason
 
 
+def test_auto_picks_osqp_for_boxed_variance_and_explains_why():
+    X = synthetic_returns(72, 5, seed=9)
+    estimator = MeanRisk(l2_coef=1e-5)
+    cv = _walk_forward()
+    _, report = cross_val_predict(estimator, X, cv=cv, n_jobs=1, return_report=True)
+    assert report.backend == "osqp"
+    assert report.reason == "boxed MeanRisk variance; compact OSQP"
+    assert report.fallback_reason is None
+    assert classify_call(estimator, cv=cv).auto_backend(estimator) == "osqp"
+
+
+def test_auto_picks_sequential_for_ratio_and_explains_why():
+    X = synthetic_returns(72, 5, seed=10)
+    estimator = MeanRisk(
+        objective_function=ObjectiveFunction.MAXIMIZE_RATIO,
+        l2_coef=1e-5,
+    )
+    cv = _walk_forward()
+    _, report = cross_val_predict(estimator, X, cv=cv, n_jobs=1, return_report=True)
+    assert report.backend == "cvxpy-sequential"
+    assert report.reason is not None
+    assert "compact subset" in report.reason
+    assert report.fallback_reason is None
+    assert classify_call(estimator, cv=cv).auto_backend(estimator) == (
+        "cvxpy-sequential"
+    )
+
+
+def test_auto_picks_clarabel_for_boxed_cvar_and_explains_why():
+    X = synthetic_returns(72, 5, seed=11)
+    estimator = MeanRisk(risk_measure=RiskMeasure.CVAR, l2_coef=1e-5)
+    cv = _walk_forward()
+    _, report = cross_val_predict(estimator, X, cv=cv, n_jobs=1, return_report=True)
+    assert report.backend == "clarabel"
+    assert report.reason == "boxed MeanRisk scenario risk; compact Clarabel"
+    assert report.fallback_reason is None
+    assert classify_call(estimator, cv=cv).auto_backend(estimator) == "clarabel"
+
+
+def test_auto_picks_closed_form_for_equal_weighted_and_explains_why():
+    X = synthetic_returns(72, 5, seed=12)
+    estimator = EqualWeighted()
+    cv = _walk_forward()
+    _, report = cross_val_predict(estimator, X, cv=cv, n_jobs=1, return_report=True)
+    assert report.backend == "closed-form"
+    assert report.reason == "closed-form weights; no solver"
+    assert report.fallback_reason is None
+    assert classify_call(estimator, cv=cv).auto_backend(estimator) == "closed-form"
+
+
+def test_resolve_backend_is_the_auto_policy():
+    cv = _walk_forward()
+    boxed = MeanRisk(l2_coef=1e-5)
+    ratio = MeanRisk(
+        objective_function=ObjectiveFunction.MAXIMIZE_RATIO,
+        l2_coef=1e-5,
+    )
+    boxed_caps = classify_call(boxed, cv=cv)
+    ratio_caps = classify_call(ratio, cv=cv)
+    assert resolve_backend("auto", boxed_caps, boxed) == "osqp"
+    assert resolve_backend("auto", ratio_caps, ratio) == "cvxpy-sequential"
+    assert resolve_backend("cvxpy-sequential", boxed_caps, boxed) == "cvxpy-sequential"
+    with pytest.raises(ValueError, match="cannot compact"):
+        resolve_backend("compact", ratio_caps, ratio)
+
+
 def test_sequential_grid_search_ratio_and_limits():
     X = synthetic_returns(72, 4, seed=8)
     cv = WalkForward(train_size=36, test_size=12)
@@ -194,6 +265,7 @@ def test_sequential_grid_search_ratio_and_limits():
         cv=cv,
     )
     assert result.acceleration_report_.backend == "sequential-grid"
+    assert "compact subset" in (result.acceleration_report_.reason or "")
     assert result.best_params_ in (
         {"min_return": 1e-6, "max_cvar": 0.8},
         {"min_return": 1e-6, "max_cvar": None},

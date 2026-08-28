@@ -39,10 +39,14 @@ Pass ``return_report=True`` to learn which path ran:
         cv=cv,
         return_report=True,
     )
-    print(report.backend)  # "osqp", "clarabel", "cvxpy-sequential", "closed-form", ...
+    print(report.backend)
+    print(report.reason)
     print(report)
 
-See :ref:`backends` for the full list of backends and eligibility rules.
+Leave ``backend`` at its default. ``"auto"`` selects compact OSQP / Clarabel
+when the boxed problem applies, Parameterized CVXPY reuse for other MeanRisk
+configurations, then fit-assemble or native skfolio. Read ``report.reason``
+to see why.
 
 What is accelerated
 *******************

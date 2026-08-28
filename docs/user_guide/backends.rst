@@ -6,7 +6,39 @@ Backends and reports
 
 .. currentmodule:: skfolio_accelerate
 
-:func:`cross_val_predict` classifies each call once, then selects a backend.
+:func:`cross_val_predict` classifies each call once. Leave ``backend`` at
+``"auto"``; the library picks an engine and records it on
+:class:`AccelerationReport`.
+
+Auto policy
+***********
+
+``backend="auto"`` (the default) selects the first eligible engine:
+
+1. compact OSQP for boxed mean-variance, Clarabel for boxed scenario risks,
+   or closed-form weights for default EqualWeighted / Random / InverseVolatility,
+2. Parameterized CVXPY reuse (``cvxpy-sequential``) for other MeanRisk
+   configurations that keep a fixed problem shape,
+3. native ``fit`` plus assembly from ``weights_``,
+4. unmodified skfolio.
+
+You do not pass an engine name in application code. Inspect the choice with
+``return_report=True``:
+
+.. code-block:: python
+
+    from skfolio.optimization import MeanRisk, ObjectiveFunction
+    from skfolio_accelerate import classify_call, cross_val_predict
+
+    prediction, report = cross_val_predict(MeanRisk(), X, cv=cv, return_report=True)
+    print(report.backend)
+    print(report.reason)
+
+    ratio = MeanRisk(objective_function=ObjectiveFunction.MAXIMIZE_RATIO)
+    print(classify_call(ratio, cv=cv).auto_backend(ratio))
+
+``report.reason`` is the policy decision. ``fallback_reason`` is set only when
+a preferred engine failed and the call retried.
 
 Backend names
 *************
@@ -24,9 +56,10 @@ Backend names
 ``sequential-grid``     Parameterized MeanRisk grid inside :func:`grid_search`
 ======================  ============================================================
 
-Force a policy with the keyword-only ``backend`` argument:
+Force a policy with the keyword-only ``backend`` argument only when you need
+an escape hatch (tests, debugging):
 
-* ``"auto"`` (default) — choose the best eligible path,
+* ``"auto"`` (default) — the policy above,
 * ``"compact"`` — require compact / closed-form; raise if ineligible,
 * ``"cvxpy-sequential"`` — require Parameterized MeanRisk reuse; raise if
   ineligible,
@@ -56,9 +89,10 @@ Inspect gates without running a backtest:
 
 .. code-block:: python
 
-    from skfolio_accelerate.predict import classify_call
+    from skfolio_accelerate import classify_call
 
     caps = classify_call(MeanRisk(), cv=cv)
+    print(caps.auto_backend(MeanRisk()))
     assert caps.can_compact
     assert caps.can_assemble
 

@@ -52,6 +52,7 @@ Functions
     :template: function.rst
 
     cross_val_predict
+    classify_call
 
 .. currentmodule:: skfolio_accelerate.predict
 
@@ -59,7 +60,8 @@ Functions
     :toctree: generated/
     :template: function.rst
 
-    classify_call
+    resolve_backend
+    compact_engine_name
     blocked_reason
     compact_blocked_reason
     sequential_blocked_reason

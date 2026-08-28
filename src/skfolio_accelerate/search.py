@@ -23,8 +23,7 @@ from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import path_moment_session
 from skfolio_accelerate.predict import (
     AccelerationReport,
-    compact_blocked_reason,
-    sequential_blocked_reason,
+    classify_call,
     solve_sequential_folds,
 )
 from skfolio_accelerate.scoring import (
@@ -82,17 +81,19 @@ def _classify_grid(
     first_failure: tuple[dict[str, Any], str] | None = None
     for candidate_params in params:
         candidate = clone(estimator).set_params(**candidate_params)
-        compact_reason = compact_blocked_reason(candidate, y=y, cv=cv)
-        sequential_reason = sequential_blocked_reason(candidate, cv=cv)
-        if compact_reason is None:
+        caps = classify_call(candidate, y=y, cv=cv)
+        if caps.can_compact:
             specs.append(estimator_spec(candidate))
         else:
             compact_ok = False
             specs.append(None)
-        if sequential_reason is not None:
+        if not caps.can_sequential:
             sequential_ok = False
             if first_failure is None:
-                first_failure = (candidate_params, sequential_reason)
+                first_failure = (
+                    candidate_params,
+                    caps.sequential_reason or "unsupported MeanRisk",
+                )
     if compact_ok:
         return params, specs, "compact"
     if sequential_ok:
@@ -238,6 +239,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
 
     report = AccelerationReport(
         backend="compact-grid",
+        reason="boxed MeanRisk grid; shared compact engines",
         n_solves=len(cv_plan.folds) * len(specs),
         n_prior_fits=n_prior_fits,
         n_prior_updates=n_prior_updates,
@@ -319,6 +321,7 @@ def _sequential_grid_search(
     eval_s = time.perf_counter() - t_eval
     report = AccelerationReport(
         backend="sequential-grid",
+        reason="MeanRisk grid outside the compact subset",
         n_solves=len(cv_plan.folds) * len(params),
         n_warm_starts=n_warm_starts,
         n_rebuilds=n_rebuilds,

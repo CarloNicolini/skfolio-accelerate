@@ -81,7 +81,8 @@ still run through skfolio unchanged.
 This boundary is intentional. Reusing mutable estimator or solver state without
 proving equivalence could silently solve a different investment problem.
 
-Pass `return_report=True` if you want to see which path was selected:
+Pass `return_report=True` if you want to see which engine `backend="auto"`
+selected and why:
 
 ```python
 prediction, report = cross_val_predict(
@@ -90,12 +91,14 @@ prediction, report = cross_val_predict(
     cv=cv,
     return_report=True,
 )
-print(report.backend)  # "osqp", "clarabel", "cvxpy-sequential", "closed-form", "fit-assemble", or "sklearn"
+print(report.backend, report.reason)
 ```
 
-``"sklearn"`` means native skfolio was used. The report explains why. If a
+You do not pass an engine name in application code. `"osqp"`, `"clarabel"`,
+and `"cvxpy-sequential"` are the policy's choices, not a user setting.
+`"sklearn"` means native skfolio was used; `report.reason` explains why. If a
 compact or sequential numerical solve cannot finish, the package retries with
-native ``fit`` and the assembled path rather than returning an
+native `fit` and the assembled path rather than returning an
 accelerator-only failure.
 
 ## Checking a result
@@ -178,10 +181,11 @@ On the small 120 × 6 suite every fold still pays CVXPY setup, so compact
 scenario risks look closer to variance (about 5–15× vs 19–30×). That ratio
 does not survive once the cone solve dominates. Closed-form EqualWeighted /
 Random / InverseVolatility skip native CV machinery (about 5–13× on this
-tiny problem). Serial estimators that still call native `fit` (HRP, standard
-deviation, Gini, …) are 1.05–2.1× — the same overhead cut, not a compact
-solver. Pipelines and sequential previous weights stay on native skfolio
-(~1×). One EVaR randomized case retried native `fit` plus assembly after
+tiny problem). Serial estimators that still call native `fit` (HRP, …) are
+1.05–2.1× — the same overhead cut, not a compact solver. Pipelines stay on
+native skfolio (~1×). MeanRisk options outside the boxed subset (ratio,
+Gini, costs, risk limits, …) reuse the original CVXPY problem across folds.
+One EVaR randomized case retried native `fit` plus assembly after
 Clarabel reported `InsufficientProgress`. Peak RSS is typically similar to
 native because importing Python and skfolio dominates these processes.
 
@@ -215,6 +219,14 @@ Use `--native-n-jobs=-1` separately when comparing parallel throughput. Native
 `n_jobs=1` is the correctness baseline. The CSV output keeps compact and
 fallback rows separate and includes timing spread, peak RSS, numerical
 difference, rankings, solver counts, and fallback reasons.
+
+Compare native skfolio to `backend="auto"` on a 20-year WalkForward across
+every `ObjectiveFunction` × non-annualized `RiskMeasure` (the library picks
+OSQP, Clarabel, or Parameterized CVXPY; you do not pass an engine name):
+
+```bash
+PYTHONPATH=src python benchmarks/benchmark_sequential_mean_risk.py --repeats 1
+```
 
 ## Documentation
 

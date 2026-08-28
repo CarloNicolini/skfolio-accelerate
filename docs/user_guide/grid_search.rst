@@ -36,4 +36,5 @@ non-MeanRisk estimators use skfolio's ``OnlineGridSearch`` or sklearn's
 
 The returned :class:`GridSearchResult` also carries
 ``acceleration_report_`` with backend ``"compact-grid"`` or
-``"sequential-grid"``.
+``"sequential-grid"``. The search selects that engine; you do not pass a
+backend name.
