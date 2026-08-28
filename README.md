@@ -231,11 +231,14 @@ OSQP; NumPy, SciPy, Clarabel, and scikit-learn come from skfolio's own runtime
 stack.
 
 ```bash
-python -m venv .venv
+uv sync --extra dev
 source .venv/bin/activate
-pip install -e ".[dev]"
 pytest
 ```
+
+This uses the project's `.python-version` pin (Python 3.12). `uv` installs that
+interpreter if needed, creates `.venv`, and installs the package in editable
+mode with the `dev` extras.
 
 ## Automation and releases
 
