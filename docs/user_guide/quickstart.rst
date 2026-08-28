@@ -6,6 +6,11 @@ Quick start
 
 .. currentmodule:: skfolio_accelerate
 
+.. warning::
+
+   **Experimental library.** Validate results against native skfolio. See
+   :ref:`methods` for the mathematics and assumptions behind the speedups.
+
 Replace skfolio's ``cross_val_predict`` import and keep the rest of the backtest
 unchanged:
 

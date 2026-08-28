@@ -1,5 +1,11 @@
 # skfolio-accelerate
 
+> **Experimental library.** Formulations, eligibility gates, and numerical
+> paths may change between releases. Validate accelerated results against
+> native skfolio on workloads that matter to you. See the documentation
+> section *Methods, mathematics, and assumptions* for the math behind the
+> speedups and the assumptions they rely on.
+
 `skfolio-accelerate` makes large skfolio backtests less repetitive. It provides
 a drop-in replacement for `skfolio.model_selection.cross_val_predict`, so an
 existing backtest usually needs one import change:
@@ -358,8 +364,11 @@ counts, and fallback reasons.
 
 ## Documentation
 
-API reference, user guide, and gallery examples are built with Sphinx (numpydoc
-+ pydata-sphinx-theme, matching skfolio's documentation style):
+API reference, user guide (including methods / mathematics / assumptions), and
+gallery examples are built with Sphinx (numpydoc + pydata-sphinx-theme,
+matching skfolio's documentation style). The gallery runs Plotly figures that
+illustrate measured speedups after the usage examples; CI executes those
+examples on every pull request and push.
 
 ```bash
 pip install -e ".[docs]"
@@ -367,7 +376,9 @@ cd docs && make html
 ```
 
 Open `docs/_build/html/index.html`. Continuous integration builds the docs on
-every pull request and publishes them to GitHub Pages from `main`.
+every pull request and publishes them to GitHub Pages from `main`. For a local
+stub build that skips executing examples, set
+`SKFOLIO_ACCELERATE_DOCS_FAST=1`.
 
 ## Installation and tests
 

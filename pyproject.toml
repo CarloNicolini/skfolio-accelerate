@@ -36,6 +36,8 @@ docs = [
   "sphinx-gallery",
   "sphinx-copybutton",
   "matplotlib",
+  "plotly>=5.0",
+  "kaleido>=0.2.1",
 ]
 
 [project.urls]

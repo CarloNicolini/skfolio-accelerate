@@ -39,6 +39,9 @@ templates_path = ["_templates"]
 exclude_patterns = ["_build", "Thumbs.db", ".DS_Store", "**.ipynb_checkpoints"]
 default_role = "literal"
 add_function_parentheses = False
+# FileNameSortKey (and similar callables) in sphinx_gallery_conf are not
+# pickleable; ignore the resulting environment-cache warning under -W.
+suppress_warnings = ["config.cache"]
 
 # -- Autodoc / autosummary / numpydoc ------------------------------------------
 autosummary_generate = True
@@ -83,6 +86,21 @@ html_context = {
     "default_mode": "light",
 }
 
+# -- Plotly (Sphinx-Gallery) ---------------------------------------------------
+# Capture interactive Plotly figures in gallery examples. kaleido provides PNG
+# thumbnails via plotly_sg_scraper; without it the HTML repr is still embedded.
+try:
+    import plotly.io as pio
+    from plotly.io._sg_scraper import plotly_sg_scraper
+    from sphinx_gallery.sorting import FileNameSortKey
+
+    pio.renderers.default = "sphinx_gallery_png"
+    _image_scrapers = ("matplotlib", plotly_sg_scraper)
+    _subsection_order = FileNameSortKey
+except ImportError:  # pragma: no cover - docs extra missing plotly
+    _image_scrapers = ("matplotlib",)
+    _subsection_order = None
+
 # -- Sphinx-Gallery ------------------------------------------------------------
 sphinx_gallery_conf = {
     "examples_dirs": ["../examples/getting_started"],
@@ -95,9 +113,13 @@ sphinx_gallery_conf = {
     "doc_module": ("skfolio_accelerate",),
     "reference_url": {"skfolio_accelerate": None},
     "backreferences_dir": "generated/backreferences",
+    "image_scrapers": _image_scrapers,
 }
+if _subsection_order is not None:
+    sphinx_gallery_conf["within_subsection_order"] = _subsection_order
 
-# Fast CI builds can skip executing examples.
+# Local/optional fast builds can skip executing examples. Continuous
+# integration always executes the gallery (including Plotly speedup figures).
 if os.environ.get("SKFOLIO_ACCELERATE_DOCS_FAST") == "1":
     sphinx_gallery_conf["plot_gallery"] = False
 
