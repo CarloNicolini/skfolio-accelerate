@@ -9,6 +9,8 @@ from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as pkg_version
 from pathlib import Path
 
+from sphinx_gallery.sorting import FileNameSortKey
+
 # -- Path setup ----------------------------------------------------------------
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
@@ -83,6 +85,18 @@ html_context = {
     "default_mode": "light",
 }
 
+# -- Plotly (Sphinx-Gallery) ---------------------------------------------------
+# Capture interactive Plotly figures in gallery examples. kaleido provides PNG
+# thumbnails via plotly_sg_scraper; without it the HTML repr is still embedded.
+try:
+    import plotly.io as pio
+    from plotly.io._sg_scraper import plotly_sg_scraper
+
+    pio.renderers.default = "sphinx_gallery_png"
+    _image_scrapers = ("matplotlib", plotly_sg_scraper)
+except ImportError:  # pragma: no cover - docs extra missing plotly
+    _image_scrapers = ("matplotlib",)
+
 # -- Sphinx-Gallery ------------------------------------------------------------
 sphinx_gallery_conf = {
     "examples_dirs": ["../examples/getting_started"],
@@ -95,9 +109,12 @@ sphinx_gallery_conf = {
     "doc_module": ("skfolio_accelerate",),
     "reference_url": {"skfolio_accelerate": None},
     "backreferences_dir": "generated/backreferences",
+    "image_scrapers": _image_scrapers,
+    "within_subsection_order": FileNameSortKey,
 }
 
-# Fast CI builds can skip executing examples.
+# Local/optional fast builds can skip executing examples. Continuous
+# integration always executes the gallery (including Plotly speedup figures).
 if os.environ.get("SKFOLIO_ACCELERATE_DOCS_FAST") == "1":
     sphinx_gallery_conf["plot_gallery"] = False
 

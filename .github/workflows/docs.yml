@@ -30,9 +30,7 @@ jobs:
           python -m pip install -e ".[docs]"
       - name: Build HTML documentation
         working-directory: docs
-        env:
-          # Full gallery on main / workflow_dispatch; fast stub pages on PRs.
-          SKFOLIO_ACCELERATE_DOCS_FAST: ${{ github.event_name == 'pull_request' && '1' || '0' }}
+        # Always execute gallery examples (including Plotly speedup figures).
         run: sphinx-build -b html -W --keep-going . _build/html
       - name: Upload documentation artifact
         uses: actions/upload-artifact@v7
