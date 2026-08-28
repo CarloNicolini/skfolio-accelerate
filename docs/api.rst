@@ -149,6 +149,7 @@ Functions
 
     compile_cv_plan
     cpcv_fold_blocks
+    chains_previous_weights
 
 .. _moments_ref:
 

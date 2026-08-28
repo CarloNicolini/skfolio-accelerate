@@ -23,7 +23,7 @@ import sklearn.utils.metadata_routing as skm
 import sklearn.utils.validation as skv
 from skfolio import RiskMeasure
 from skfolio._constants import _TRANSACTION_COSTS
-from skfolio.optimization import MeanRisk
+from skfolio.optimization import MeanRisk, ObjectiveFunction
 from skfolio.optimization.convex._base import ConvexOptimization
 from skfolio.prior import ReturnDistribution
 from skfolio.typing import ArrayLike, FloatArray
@@ -31,6 +31,21 @@ from skfolio.utils.tools import _call_estimator
 from sklearn.base import clone
 
 _HOMOG_SENTINEL = object()
+
+
+class _CvxpyProxy:
+    """Rebind ``_mean_risk.cp`` without mutating the global ``cvxpy.Constant`` type."""
+
+    def __init__(self, real, constant_hook):
+        self._real = real
+        self._constant_hook = constant_hook
+
+    def Constant(self, val, *args, **kwargs):
+        return self._constant_hook(val, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
 
 _OBSERVATION_SHAPED_RISKS = frozenset(
     {
@@ -374,7 +389,8 @@ class ParametricMeanRisk(MeanRisk):
         """Expose the Charnes–Cooper homogenization factor as a Parameter."""
         state = self._param_state()
         original_homog = _mean_risk_mod._optimal_homogenization_factor
-        original_constant = _mean_risk_mod.cp.Constant
+        original_cp = _mean_risk_mod.cp
+        original_constant = original_cp.Constant
 
         def hooked_homog(mu):
             value = float(original_homog(mu))
@@ -389,12 +405,12 @@ class ParametricMeanRisk(MeanRisk):
             return original_constant(val, *args, **kwargs)
 
         _mean_risk_mod._optimal_homogenization_factor = hooked_homog
-        _mean_risk_mod.cp.Constant = hooked_constant
+        _mean_risk_mod.cp = _CvxpyProxy(_mean_risk_mod.cp, hooked_constant)
         try:
             yield
         finally:
             _mean_risk_mod._optimal_homogenization_factor = original_homog
-            _mean_risk_mod.cp.Constant = original_constant
+            _mean_risk_mod.cp = original_cp
 
     def _ensure_warm_start(self) -> None:
         params = dict(getattr(self, "_solver_params", None) or {})
@@ -599,11 +615,15 @@ class ParametricMeanRisk(MeanRisk):
                 return self
             state.active_topo = topology
             self._clear_active_params()
+            return self._compile_skfolio(X, y, method, **fit_params)
+        self._clear_active_params()
+        return self._compile_skfolio(X, y, method, **fit_params)
+
+    def _compile_skfolio(self, X, y, method, **fit_params):
+        if self.objective_function is ObjectiveFunction.MAXIMIZE_RATIO:
             with self._homogenization_parameters():
                 return super()._fit(X, y, method=method, **fit_params)
-        self._clear_active_params()
-        with self._homogenization_parameters():
-            return super()._fit(X, y, method=method, **fit_params)
+        return super()._fit(X, y, method=method, **fit_params)
 
 
 class SequentialProblemCache:

@@ -22,7 +22,7 @@ import copy
 import os
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Literal
 
 import numpy as np
@@ -45,8 +45,16 @@ from sklearn.pipeline import Pipeline
 
 from skfolio_accelerate._arrays import as_float_2d, as_float_array
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec, estimator_spec
-from skfolio_accelerate.cv_plan import CVPlan, FoldSpec, compile_cv_plan
-from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
+from skfolio_accelerate.cv_plan import (
+    CVPlan,
+    FoldSpec,
+    chains_previous_weights,
+    compile_cv_plan,
+)
+from skfolio_accelerate.mean_risk_problem import (
+    ParametricMeanRisk,
+    SequentialProblemCache,
+)
 from skfolio_accelerate.moments import (
     PathMomentSession,
     is_default_empirical,
@@ -294,6 +302,10 @@ class FoldBatchResult:
 
     is_dpp : bool or None, default=None
         DPP flag reported by the sequential adapter, when available.
+
+    previous_weights : dict[int, ndarray or None]
+        ``previous_weights`` used when solving each ``fold_id``, for portfolio
+        assembly that charges transaction costs.
     """
 
     weights: dict[int, NDArray[np.float64]]
@@ -305,6 +317,7 @@ class FoldBatchResult:
     n_prior_updates: int = 0
     n_rebuilds: int = 0
     is_dpp: bool | None = None
+    previous_weights: dict[int, Any] = field(default_factory=dict)
 
 
 def _cap_native_threads() -> None:
@@ -568,10 +581,11 @@ def sequential_blocked_reason(
     """Why this call cannot reuse a Parameterized MeanRisk CVXPY problem.
 
     Sequential reuse keeps skfolio's full constraint set. It is blocked for
-    pipelines, non-MeanRisk estimators, custom CVXPY hooks that close over a
-    window, fallback estimators other than ``"previous_weights"``, and the
-    same call-level options that force native skfolio (parallel ``n_jobs``,
-    shuffled CV, ``efficient_frontier_size``, ...).
+    pipelines, MeanRisk subclasses, non-MeanRisk estimators, custom CVXPY
+    hooks that close over a window, fallback estimators other than
+    ``"previous_weights"``, and the same call-level options that force native
+    skfolio (parallel ``n_jobs``, shuffled CV, ``efficient_frontier_size``,
+    ...).
 
     Transaction costs, turnover, and ``previous_weights`` are allowed: they
     are economic state updated as Parameters, not a reason to leave the
@@ -591,7 +605,7 @@ def sequential_blocked_reason(
         return "shuffled CV uses skfolio cross_val_predict"
     if isinstance(estimator, Pipeline):
         return "pipelines use skfolio cross_val_predict"
-    if not isinstance(estimator, MeanRisk):
+    if type(estimator) not in {MeanRisk, ParametricMeanRisk}:
         return f"estimator {type(estimator).__name__} is not MeanRisk"
     if getattr(estimator, "raise_on_failure", True) is not True:
         return "raise_on_failure=False uses skfolio cross_val_predict"
@@ -695,11 +709,13 @@ def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
         Combined weight map and summed timing / accounting fields.
     """
     weights: dict[int, NDArray[np.float64]] = {}
+    previous_weights: dict[int, Any] = {}
     moments_s = solve_s = 0.0
     n_solves = n_warm = n_fits = n_updates = n_rebuilds = 0
     is_dpp: bool | None = None
     for part in parts:
         weights.update(part.weights)
+        previous_weights.update(part.previous_weights)
         moments_s += part.moments_s
         solve_s += part.solve_s
         n_solves += part.n_solves
@@ -719,6 +735,7 @@ def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
         n_prior_updates=n_updates,
         n_rebuilds=n_rebuilds,
         is_dpp=is_dpp,
+        previous_weights=previous_weights,
     )
 
 
@@ -804,6 +821,7 @@ def solve_sequential_folds(
     *,
     cache: SequentialProblemCache | None = None,
     path_id: int = 0,
+    chain_previous_weights: bool = False,
 ) -> FoldBatchResult:
     """Solve one path batch with a Parameterized MeanRisk CVXPY problem.
 
@@ -815,12 +833,16 @@ def solve_sequential_folds(
     warm_before = adapter.n_warm_starts
     rebuild_before = adapter.n_rebuilds
     weights: dict[int, NDArray[np.float64]] = {}
+    previous_used: dict[int, Any] = {}
     solve_s = 0.0
-    previous: NDArray[np.float64] | None = None
-    needs_prev = bool(getattr(adapter, "needs_previous_weights", False))
+    previous = getattr(adapter, "previous_weights", None)
+    chain = chain_previous_weights and bool(
+        getattr(adapter, "needs_previous_weights", False)
+    )
     n_assets = int(x_arr.shape[1])
     for fold in folds:
-        if needs_prev and previous is not None:
+        previous_used[fold.fold_id] = previous
+        if chain:
             adapter.set_params(previous_weights=previous)
         x_train = _train_slice(X, x_arr, fold)
         y_train = _train_target(y_arr, fold, n_assets)
@@ -833,7 +855,8 @@ def solve_sequential_folds(
         if fitted.ndim != 1:
             raise ValueError("2-dimensional weights_ cannot be assembled")
         weights[fold.fold_id] = np.ascontiguousarray(fitted)
-        previous = weights[fold.fold_id]
+        if chain:
+            previous = weights[fold.fold_id]
         solve_s += time.perf_counter() - started
     return FoldBatchResult(
         weights=weights,
@@ -842,6 +865,7 @@ def solve_sequential_folds(
         n_warm_starts=adapter.n_warm_starts - warm_before,
         n_rebuilds=adapter.n_rebuilds - rebuild_before,
         is_dpp=adapter.is_dpp_,
+        previous_weights=previous_used,
     )
 
 
@@ -1413,6 +1437,7 @@ def cross_val_predict(
 
     if capabilities.can_sequential:
         cache = SequentialProblemCache(estimator)
+        chain_prev = chains_previous_weights(cv_plan)
         try:
             merged = merge_batch_results(
                 [
@@ -1424,6 +1449,7 @@ def cross_val_predict(
                         batch,
                         cache=cache,
                         path_id=path_index,
+                        chain_previous_weights=chain_prev,
                     )
                     for path_index, batch in enumerate(cv_plan.path_batches())
                 ]
@@ -1478,6 +1504,10 @@ def cross_val_predict(
             name=type(estimator).__name__,
             portfolio_params=portfolio_params,
             segment_params=_segment_params(estimator),
+            fold_segment_params={
+                fold_id: {"previous_weights": prev}
+                for fold_id, prev in merged.previous_weights.items()
+            },
         )
         report = _report_from_batch(
             "cvxpy-sequential",

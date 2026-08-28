@@ -18,7 +18,7 @@ from sklearn.model_selection import ParameterGrid
 
 from skfolio_accelerate._arrays import as_float_2d, as_float_array
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec, estimator_spec
-from skfolio_accelerate.cv_plan import compile_cv_plan
+from skfolio_accelerate.cv_plan import chains_previous_weights, compile_cv_plan
 from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import path_moment_session
 from skfolio_accelerate.predict import (
@@ -290,6 +290,7 @@ def _sequential_grid_search(
                 folds,
                 cache=cache,
                 path_id=path_index,
+                chain_previous_weights=chains_previous_weights(cv_plan),
             )
             weights[candidate_id].update(result.weights)
             solve_s += result.solve_s

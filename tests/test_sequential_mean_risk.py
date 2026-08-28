@@ -176,6 +176,14 @@ def test_custom_hooks_stay_on_fit_assemble():
     assert report.backend == "fit-assemble"
 
 
+def test_mean_risk_subclasses_are_not_parameterized():
+    from skfolio.optimization import MaximumDiversification
+
+    reason = sequential_blocked_reason(MaximumDiversification())
+    assert reason is not None
+    assert "MaximumDiversification" in reason
+
+
 def test_sequential_grid_search_ratio_and_limits():
     X = synthetic_returns(72, 4, seed=8)
     cv = WalkForward(train_size=36, test_size=12)

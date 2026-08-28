@@ -140,6 +140,27 @@ class CVPlan:
         return tuple(tuple(buckets[key]) for key in sorted(buckets))
 
 
+def chains_previous_weights(plan: CVPlan) -> bool:
+    """Whether native skfolio would propagate ``previous_weights`` along this plan.
+
+    WalkForward, TimeSeriesSplit, and MultipleRandomizedCV paths chain economic
+    state between folds. KFold and combinatorial purged CV do not.
+
+    Parameters
+    ----------
+    plan : CVPlan
+        Compiled splitter plan.
+
+    Returns
+    -------
+    chained : bool
+        ``True`` when each fold should receive the previous fold's weights.
+    """
+    return plan.kind in {"walk_forward", "mrc"} or plan.splitter_name == (
+        "TimeSeriesSplit"
+    )
+
+
 def cpcv_fold_blocks(n_samples: int, n_folds: int) -> list[NDArray[np.intp]]:
     """Observation indices belonging to each CPCV fold (same rule as skfolio).
 
