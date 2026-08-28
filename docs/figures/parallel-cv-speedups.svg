@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="820" viewBox="0 0 1120 820" role="img" aria-labelledby="title desc">
+  <title id="title">Serial auto versus 4-core native joblib</title>
+  <desc id="desc">Speedup versus native n_jobs=1 on MultipleRandomizedCV and 45-split CombinatorialPurgedCV. Grey bars are native n_jobs=-1 with solver threads capped to 1. Blue auto bars beat that parallel native run; red auto bars do not.</desc>
+  <style>
+    text { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; fill: #172033; }
+    .title { font-size: 26px; font-weight: 700; }
+    .subtitle { font-size: 14px; fill: #55627a; }
+    .label { font-size: 14px; font-weight: 600; }
+    .engine { font-size: 12px; fill: #66748c; }
+    .value { font-size: 13px; fill: #33415c; }
+    .axis { font-size: 13px; fill: #66748c; }
+    .note { font-size: 13px; fill: #55627a; }
+    .section { font-size: 14px; font-weight: 700; fill: #33415c; }
+  </style>
+  <rect width="1120" height="820" fill="#ffffff"/>
+  <text x="50" y="44" class="title">4-core native joblib vs serial auto</text>
+  <text x="50" y="68" class="subtitle">Speedup vs native n_jobs=1 on 5,040 × 20 returns. Grey = native n_jobs=-1 (solver threads=1). Blue auto beats parallel native; red does not.</text>
+  <rect x="520" y="84" width="14" height="14" rx="2" fill="#64748b"/><text x="540" y="96" class="note">native n_jobs=-1 · 4 cores</text>
+  <rect x="760" y="84" width="14" height="14" rx="2" fill="#2563eb"/><text x="780" y="96" class="note">auto n_jobs=1 beats parallel native</text>
+  <rect x="50" y="108" width="14" height="14" rx="2" fill="#9f1239"/><text x="70" y="120" class="note">auto n_jobs=1 loses to parallel native</text>
+  <text x="50" y="150" class="section">Independent paths where joblib helps most (OSQP, 0–50×)</text>
+  <g stroke="#dce3ef" stroke-width="1">
+    <line x1="250" y1="162" x2="1000" y2="162"/>
+    <line x1="250" y1="162" x2="250" y2="278"/>
+    <line x1="400" y1="162" x2="400" y2="278"/>
+    <line x1="550" y1="162" x2="550" y2="278"/>
+    <line x1="700" y1="162" x2="700" y2="278"/>
+    <line x1="850" y1="162" x2="850" y2="278"/>
+    <line x1="1000" y1="162" x2="1000" y2="278"/>
+  </g>
+  <g class="axis">
+    <text x="246" y="154">0×</text>
+    <text x="396" y="154">10×</text>
+    <text x="546" y="154">20×</text>
+    <text x="696" y="154">30×</text>
+    <text x="846" y="154">40×</text>
+    <text x="996" y="154">50×</text>
+  </g>
+  <g>
+    <text x="50" y="192" class="label">MRC variance</text>
+    <text x="50" y="210" class="engine">compact OSQP</text>
+    <rect x="250" y="170" width="55" height="16" rx="3" fill="#64748b"/><text x="313" y="183" class="value">3.66×</text>
+    <rect x="250" y="190" width="706" height="16" rx="3" fill="#2563eb"/><text x="964" y="203" class="value">47.1×</text>
+    <text x="50" y="250" class="label">CPCV-45 variance</text>
+    <text x="50" y="268" class="engine">compact OSQP</text>
+    <rect x="250" y="228" width="41" height="16" rx="3" fill="#64748b"/><text x="299" y="241" class="value">2.73×</text>
+    <rect x="250" y="248" width="258" height="16" rx="3" fill="#2563eb"/><text x="516" y="261" class="value">17.2×</text>
+  </g>
+  <text x="50" y="308" class="section">CVaR, sequential std, and MAXIMIZE_RATIO (0–5×)</text>
+  <g stroke="#dce3ef" stroke-width="1">
+    <line x1="250" y1="320" x2="1000" y2="320"/>
+    <line x1="250" y1="320" x2="250" y2="668"/>
+    <line x1="400" y1="320" x2="400" y2="668"/>
+    <line x1="550" y1="320" x2="550" y2="668"/>
+    <line x1="700" y1="320" x2="700" y2="668"/>
+    <line x1="850" y1="320" x2="850" y2="668"/>
+    <line x1="1000" y1="320" x2="1000" y2="668"/>
+  </g>
+  <g class="axis">
+    <text x="246" y="312">0×</text>
+    <text x="396" y="312">1×</text>
+    <text x="546" y="312">2×</text>
+    <text x="696" y="312">3×</text>
+    <text x="846" y="312">4×</text>
+    <text x="996" y="312">5×</text>
+  </g>
+  <g>
+    <text x="50" y="350" class="label">MRC CVaR</text>
+    <text x="50" y="368" class="engine">compact Clarabel</text>
+    <rect x="250" y="328" width="552" height="16" rx="3" fill="#64748b"/><text x="810" y="341" class="value">3.68×</text>
+    <rect x="250" y="348" width="664" height="16" rx="3" fill="#2563eb"/><text x="922" y="361" class="value">4.43×</text>
+    <text x="50" y="408" class="label">CPCV-45 CVaR</text>
+    <text x="50" y="426" class="engine">compact Clarabel</text>
+    <rect x="250" y="386" width="556" height="16" rx="3" fill="#64748b"/><text x="814" y="399" class="value">3.70×</text>
+    <rect x="250" y="406" width="175" height="16" rx="3" fill="#9f1239"/><text x="433" y="419" class="value">1.17×</text>
+    <text x="50" y="466" class="label">MRC std. deviation</text>
+    <text x="50" y="484" class="engine">sequential CVXPY</text>
+    <rect x="250" y="444" width="531" height="16" rx="3" fill="#64748b"/><text x="789" y="457" class="value">3.54×</text>
+    <rect x="250" y="464" width="368" height="16" rx="3" fill="#9f1239"/><text x="626" y="477" class="value">2.45×</text>
+    <text x="50" y="524" class="label">CPCV-45 std. deviation</text>
+    <text x="50" y="542" class="engine">sequential CVXPY</text>
+    <rect x="250" y="502" width="422" height="16" rx="3" fill="#64748b"/><text x="680" y="515" class="value">2.81×</text>
+    <rect x="250" y="522" width="314" height="16" rx="3" fill="#9f1239"/><text x="572" y="535" class="value">2.09×</text>
+    <text x="50" y="582" class="label">MRC max ratio</text>
+    <text x="50" y="600" class="engine">fit-assemble</text>
+    <rect x="250" y="560" width="532" height="16" rx="3" fill="#64748b"/><text x="790" y="573" class="value">3.55×</text>
+    <rect x="250" y="580" width="174" height="16" rx="3" fill="#9f1239"/><text x="432" y="593" class="value">1.16×</text>
+    <text x="50" y="640" class="label">CPCV-45 max ratio</text>
+    <text x="50" y="658" class="engine">fit-assemble</text>
+    <rect x="250" y="618" width="445" height="16" rx="3" fill="#64748b"/><text x="703" y="631" class="value">2.97×</text>
+    <rect x="250" y="638" width="172" height="16" rx="3" fill="#9f1239"/><text x="430" y="651" class="value">1.15×</text>
+  </g>
+  <line x1="50" y1="690" x2="1070" y2="690" stroke="#dce3ef"/>
+  <text x="50" y="716" class="note">Amortized engines stay serial (warm starts / Parameter reuse). native n_jobs=-1 on skfolio_accelerate.cross_val_predict selects unmodified skfolio, not compact/sequential.</text>
+  <text x="50" y="738" class="note">4-core native is ~3.4–3.7× vs serial native on MRC. Serial OSQP still wins 13× against that. Serial Clarabel only ties or slightly beats MRC; 45 independent CVaR cones prefer joblib.</text>
+  <text x="50" y="760" class="note">Sequential std and MAXIMIZE_RATIO lose to 4-core native (~0.3–0.7×). Six-solve CPCV is too small for joblib; see the table for WalkForward and CPCV-6.</text>
+  <text x="50" y="782" class="note">Source: benchmarks/benchmark_parallel_cv.py · 4 CPUs · solver thread caps=1 · seed 42 · Python 3.12, skfolio 1.0.0.</text>
+</svg>

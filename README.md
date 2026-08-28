@@ -83,7 +83,8 @@ Not sequential (fit-assemble or native skfolio):
 - `add_constraints` / `add_objective` / `overwrite_expected_return`;
 - uncertainty sets, `max_tracking_error`;
 - MeanRisk subclasses;
-- pipelines, `n_jobs != 1`, and other options that change `predict`.
+- pipelines, `n_jobs != 1` (that argument selects unmodified skfolio), and
+  other options that change `predict`.
 
 Gini mean-difference is sequential-eligible but omitted from the default
 benchmark: a year-long training window is a ~20-minute LP per side and stays
@@ -238,9 +239,91 @@ these processes.
 
 ![EqualWeighted native CV overhead](docs/figures/cv-overhead-breakdown.svg)
 
+### Parallel folds and solver threads
+
+Amortized engines stay serial: OSQP/Clarabel warm starts and Parameterized
+CVXPY reuse a single compiled problem. MRC asset-subset paths and CPCV
+combinations are independent, so native skfolio can use joblib. Passing
+`n_jobs=-1` to `skfolio_accelerate.cross_val_predict` selects unmodified
+skfolio, not compact or sequential.
+
+The fair multi-core comparison is therefore **native `n_jobs=-1` with solver
+threads capped to 1** versus **serial `backend="auto"`**. This machine has 4
+CPUs. Native joblib scales about **3.4–3.7×** on WalkForward / MRC (close to
+the core count). Serial OSQP still wins by an order of magnitude; serial
+Clarabel only ties or slightly beats 4-core native on MRC; 45 independent
+CVaR cones prefer joblib.
+
+![4-core native joblib vs serial auto](docs/figures/parallel-cv-speedups.svg)
+
+Speedup versus native `n_jobs=1` (same 5,040 × 20 sample, thread caps = 1):
+
+| Case | CV | native 1 | native −1 | auto | auto vs 1 | auto vs −1 | Engine |
+|---|---|---:|---:|---:|---:|---:|---|
+| Variance | WalkForward (228) | 2.25 s | 0.67 s | 0.049 s | 45.9× | **13.6×** | OSQP |
+| Variance | MRC (480) | 4.33 s | 1.18 s | 0.092 s | 47.1× | **12.9×** | OSQP |
+| Variance | CPCV-45 | 0.44 s | 0.16 s | 0.025 s | 17.2× | **6.3×** | OSQP |
+| CVaR | WalkForward (228) | 3.17 s | 0.91 s | 0.93 s | 3.42× | 0.99× | Clarabel |
+| CVaR | MRC (480) | 5.93 s | 1.61 s | 1.34 s | 4.43× | **1.20×** | Clarabel |
+| CVaR | CPCV-45 | 6.58 s | 1.78 s | 5.65 s | 1.17× | **0.31×** | Clarabel |
+| Std. deviation | WalkForward (228) | 1.94 s | 0.58 s | 0.78 s | 2.50× | 0.74× | Sequential |
+| Std. deviation | MRC (480) | 4.05 s | 1.14 s | 1.65 s | 2.45× | 0.69× | Sequential |
+| Std. deviation | CPCV-45 | 0.43 s | 0.15 s | 0.21 s | 2.09× | 0.74× | Sequential |
+| Max ratio · variance | MRC (480) | 4.76 s | 1.34 s | 4.10 s | 1.16× | 0.33× | Fit-assemble |
+| Max ratio · variance | CPCV-45 | 0.49 s | 0.17 s | 0.43 s | 1.15× | 0.39× | Fit-assemble |
+
+Six-solve CPCV (`n_folds=4`) is too small for joblib: variance only goes
+0.059 s → 0.038 s. CPCV-45 is `CombinatorialPurgedCV(n_folds=10, n_test_folds=2)`.
+
+When you *do* use native skfolio, sklearn `GridSearchCV`, or
+`cross_val_score` with `n_jobs=-1`, pin solver-internal threads to 1 so
+workers do not oversubscribe the machine:
+
+```python
+import os
+
+for key in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+):
+    os.environ.setdefault(key, "1")
+
+from skfolio.optimization import MeanRisk
+
+estimator = MeanRisk(solver_params={"max_threads": 1})
+```
+
+`cross_val_predict` already sets those OpenMP/BLAS variables and compact
+Clarabel uses `max_threads=1`. On this MRC variance cell, native
+`n_jobs=-1` was 1.19 s with either 1 or 4 BLAS threads: the run is
+Clarabel-bound, not BLAS-bound. The cap still matters for OSQP/OpenBLAS
+workloads and for mixed joblib pools.
+
+For exploratory hyperparameter search on **native** MeanRisk, relaxing
+Clarabel gaps from the default to `1e-4` can cut short-window solves
+without moving allocations. A 252-day 20-asset CVaR `fit` went 18.4 ms →
+13.0 ms (**1.42×**) with `max |Δw| = 0`. On 756-day and 20-year windows the
+same change did **not** move wall time: CVXPY construction dominates.
+`grid_search` is the better lever for compact MeanRisk: eight `l2_coef`
+candidates on the 20-year WalkForward took **4.72 s** as a native
+`ParameterGrid` with `n_jobs=-1`, versus **0.14 s** for compact
+`grid_search` (**34×**), still at the tight OSQP/Clarabel tolerances.
+
+```python
+from skfolio import RiskMeasure
+from skfolio.optimization import MeanRisk
+
+MeanRisk(
+    risk_measure=RiskMeasure.CVAR,
+    solver_params={"tol_gap_abs": 1e-4, "tol_gap_rel": 1e-4},
+)
+```
+
 The project does not claim one universal speedup number. Measured results
-depend on data shape and how many overlapping training windows you actually
-run.
+depend on data shape, how many overlapping training windows you actually
+run, and whether native skfolio is allowed to use every core.
 
 Compare native skfolio to `backend="auto"` across every
 `ObjectiveFunction` × non-annualized `RiskMeasure` on WalkForward,
@@ -250,6 +333,7 @@ Clarabel, sequential CVXPY, or fit-assemble; you do not pass an engine name):
 ```bash
 PYTHONPATH=src python benchmarks/benchmark_sequential_mean_risk.py --repeats 1
 PYTHONPATH=src python benchmarks/benchmark_sequential_mean_risk.py --quick
+PYTHONPATH=src python benchmarks/benchmark_parallel_cv.py
 PYTHONPATH=src python benchmarks/render_readme_figures.py
 ```
 
@@ -266,10 +350,11 @@ PYTHONPATH=src python benchmarks/benchmark_matrix.py --repeats 3 \
   --only 'MeanRisk[MAX_DRAWDOWN]'
 ```
 
-Use `--native-n-jobs=-1` separately when comparing parallel throughput. Native
-`n_jobs=1` is the correctness baseline. The matrix CSV keeps compact and
-fallback rows separate and includes timing spread, peak RSS, numerical
-difference, rankings, solver counts, and fallback reasons.
+`benchmark_matrix.py --native-n-jobs=-1` is the isolated-process version of
+the same parallel comparison. Native `n_jobs=1` remains the correctness
+baseline. The matrix CSV keeps compact and fallback rows separate and
+includes timing spread, peak RSS, numerical difference, rankings, solver
+counts, and fallback reasons.
 
 ## Documentation
 

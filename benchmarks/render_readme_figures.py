@@ -349,6 +349,169 @@ def render_long(rows: list[dict[str, str]], path: Path) -> None:
     path.write_text(svg)
 
 
+def _find_parallel(
+    rows: list[dict[str, str]], *, cv: str, case: str
+) -> dict[str, str] | None:
+    for row in rows:
+        if row["cv"] == cv and row["case"] == case and row.get("status") == "ok":
+            return row
+    return None
+
+
+def render_parallel(rows: list[dict[str, str]], path: Path) -> None:
+    groups = [
+        (
+            "MRC variance",
+            "compact OSQP",
+            "multiple-randomized",
+            "MINIMIZE_RISK/VARIANCE",
+            True,
+        ),
+        (
+            "CPCV-45 variance",
+            "compact OSQP",
+            "purged-cpcv-wide",
+            "MINIMIZE_RISK/VARIANCE",
+            True,
+        ),
+        (
+            "MRC CVaR",
+            "compact Clarabel",
+            "multiple-randomized",
+            "MINIMIZE_RISK/CVAR",
+            False,
+        ),
+        (
+            "CPCV-45 CVaR",
+            "compact Clarabel",
+            "purged-cpcv-wide",
+            "MINIMIZE_RISK/CVAR",
+            False,
+        ),
+        (
+            "MRC std. deviation",
+            "sequential CVXPY",
+            "multiple-randomized",
+            "MINIMIZE_RISK/STANDARD_DEVIATION",
+            False,
+        ),
+        (
+            "CPCV-45 std. deviation",
+            "sequential CVXPY",
+            "purged-cpcv-wide",
+            "MINIMIZE_RISK/STANDARD_DEVIATION",
+            False,
+        ),
+        (
+            "MRC max ratio",
+            "fit-assemble",
+            "multiple-randomized",
+            "MAXIMIZE_RATIO/VARIANCE",
+            False,
+        ),
+        (
+            "CPCV-45 max ratio",
+            "fit-assemble",
+            "purged-cpcv-wide",
+            "MAXIMIZE_RATIO/VARIANCE",
+            False,
+        ),
+    ]
+    n_cpus = next((row.get("n_cpus") for row in rows if row.get("n_cpus")), "?")
+    osqp_groups = [g for g in groups if g[4]]
+    other_groups = [g for g in groups if not g[4]]
+
+    def bars(y0: int, selected: list[tuple], px_per_x: float) -> str:
+        chunks: list[str] = []
+        for index, (label, engine, cv, case, _) in enumerate(selected):
+            top = y0 + index * 58
+            row = _find_parallel(rows, cv=cv, case=case)
+            chunks.append(
+                f'    <text x="50" y="{top + 22}" class="label">{label}</text>'
+            )
+            chunks.append(
+                f'    <text x="50" y="{top + 40}" class="engine">{engine}</text>'
+            )
+            if row is None:
+                chunks.append(
+                    f'    <text x="250" y="{top + 22}" class="engine">—</text>'
+                )
+                continue
+            native_x = _num(row, "parallel_vs_serial")
+            auto_x = _num(row, "speedup_vs_serial")
+            native_w = max(4.0, native_x * px_per_x)
+            auto_w = max(4.0, auto_x * px_per_x)
+            auto_fill = "#2563eb" if auto_x + 1e-9 >= native_x else "#9f1239"
+            chunks.append(
+                f'    <rect x="250" y="{top}" width="{native_w:.0f}" height="16" '
+                f'rx="3" fill="#64748b"/>'
+                f'<text x="{250 + native_w + 8:.0f}" y="{top + 13}" class="value">'
+                f"{_fmt(native_x)}</text>"
+            )
+            chunks.append(
+                f'    <rect x="250" y="{top + 20}" width="{auto_w:.0f}" height="16" '
+                f'rx="3" fill="{auto_fill}"/>'
+                f'<text x="{250 + auto_w + 8:.0f}" y="{top + 33}" class="value">'
+                f"{_fmt(auto_x)}</text>"
+            )
+        return "\n".join(chunks)
+
+    svg = (
+        _svg_head(
+            1120,
+            820,
+            "Serial auto versus 4-core native joblib",
+            "Speedup versus native n_jobs=1 on MultipleRandomizedCV and 45-split CombinatorialPurgedCV. Grey bars are native n_jobs=-1 with solver threads capped to 1. Blue auto bars beat that parallel native run; red auto bars do not.",
+        )
+        + '  <text x="50" y="44" class="title">4-core native joblib vs serial auto</text>\n'
+        + '  <text x="50" y="68" class="subtitle">Speedup vs native n_jobs=1 on 5,040 × 20 returns. Grey = native n_jobs=-1 (solver threads=1). Blue auto beats parallel native; red does not.</text>\n'
+        + f'  <rect x="520" y="84" width="14" height="14" rx="2" fill="#64748b"/><text x="540" y="96" class="note">native n_jobs=-1 · {n_cpus} cores</text>\n'
+        + '  <rect x="760" y="84" width="14" height="14" rx="2" fill="#2563eb"/><text x="780" y="96" class="note">auto n_jobs=1 beats parallel native</text>\n'
+        + '  <rect x="50" y="108" width="14" height="14" rx="2" fill="#9f1239"/><text x="70" y="120" class="note">auto n_jobs=1 loses to parallel native</text>\n'
+        + '  <text x="50" y="150" class="section">Independent paths where joblib helps most (OSQP, 0–50×)</text>\n'
+        + _grid(
+            250,
+            162,
+            278,
+            [
+                (250, "0×"),
+                (400, "10×"),
+                (550, "20×"),
+                (700, "30×"),
+                (850, "40×"),
+                (1000, "50×"),
+            ],
+        )
+        + "  <g>\n"
+        + bars(170, osqp_groups, 750 / 50)
+        + "\n  </g>\n"
+        + '  <text x="50" y="308" class="section">CVaR, sequential std, and MAXIMIZE_RATIO (0–5×)</text>\n'
+        + _grid(
+            250,
+            320,
+            668,
+            [
+                (250, "0×"),
+                (400, "1×"),
+                (550, "2×"),
+                (700, "3×"),
+                (850, "4×"),
+                (1000, "5×"),
+            ],
+        )
+        + "  <g>\n"
+        + bars(328, other_groups, 750 / 5)
+        + "\n  </g>\n"
+        + '  <line x1="50" y1="690" x2="1070" y2="690" stroke="#dce3ef"/>\n'
+        + '  <text x="50" y="716" class="note">Amortized engines stay serial (warm starts / Parameter reuse). native n_jobs=-1 on skfolio_accelerate.cross_val_predict selects unmodified skfolio, not compact/sequential.</text>\n'
+        + '  <text x="50" y="738" class="note">4-core native is ~3.4–3.7× vs serial native on MRC. Serial OSQP still wins 13× against that. Serial Clarabel only ties or slightly beats MRC; 45 independent CVaR cones prefer joblib.</text>\n'
+        + '  <text x="50" y="760" class="note">Sequential std and MAXIMIZE_RATIO lose to 4-core native (~0.3–0.7×). Six-solve CPCV is too small for joblib; see the table for WalkForward and CPCV-6.</text>\n'
+        + '  <text x="50" y="782" class="note">Source: benchmarks/benchmark_parallel_cv.py · 4 CPUs · solver thread caps=1 · seed 42 · Python 3.12, skfolio 1.0.0.</text>\n'
+        + "</svg>\n"
+    )
+    path.write_text(svg)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -360,6 +523,11 @@ def main() -> None:
         "--quick-csv",
         type=Path,
         default=Path("benchmarks/sequential_mean_risk_speedups_quick.csv"),
+    )
+    parser.add_argument(
+        "--parallel-csv",
+        type=Path,
+        default=Path("benchmarks/parallel_cv_speedups.csv"),
     )
     parser.add_argument(
         "--figures",
@@ -378,6 +546,13 @@ def main() -> None:
         print(f"wrote {args.figures / 'long-workload-speedups.svg'}")
     else:
         print(f"skip long chart: {args.long_csv} missing")
+    if args.parallel_csv.is_file():
+        render_parallel(
+            _read(args.parallel_csv), args.figures / "parallel-cv-speedups.svg"
+        )
+        print(f"wrote {args.figures / 'parallel-cv-speedups.svg'}")
+    else:
+        print(f"skip parallel chart: {args.parallel_csv} missing")
 
 
 if __name__ == "__main__":

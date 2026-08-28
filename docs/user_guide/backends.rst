@@ -83,3 +83,36 @@ CVXPY reuse or serial fit-assemble.
     Do not reuse mutable estimator or solver state across unrelated calls
     without proving equivalence. All reuse in this package is local to one
     :func:`cross_val_predict` / :func:`grid_search` invocation.
+
+Parallel folds and solver threads
+*********************************
+
+Amortized backends require ``n_jobs in {None, 1}``. MRC paths and CPCV
+combinations are independent, so native skfolio can use joblib: pass
+``n_jobs=-1`` and this package forwards the call to unmodified skfolio.
+
+When you use that native path (or sklearn ``GridSearchCV`` /
+``cross_val_score``), cap solver-internal threads to 1 so workers do not
+oversubscribe cores:
+
+.. code-block:: python
+
+    import os
+    from skfolio.optimization import MeanRisk
+
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ.setdefault(key, "1")
+
+    estimator = MeanRisk(solver_params={"max_threads": 1})
+
+:func:`cross_val_predict` already sets those environment variables, and
+compact Clarabel uses ``max_threads=1``. On a 4-core 20-year MRC, native
+joblib is about 3.5× versus serial native. Serial compact OSQP still beats
+that parallel run by ~13×; serial compact CVaR only ties or slightly wins
+on MRC, and 45 independent CVaR cones prefer joblib. Sequential std and
+``MAXIMIZE_RATIO`` lose to ``n_jobs=-1``.
