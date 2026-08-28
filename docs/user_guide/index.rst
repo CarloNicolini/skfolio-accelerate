@@ -17,7 +17,7 @@ User Guide
 repeated work that does not change the portfolio problem:
 
 * overlapping empirical moments are updated from sufficient statistics,
-* compact OSQP / Clarabel engines reuse a fixed cone topology across folds,
+* compact OSQP / HiGHS / Clarabel engines reuse a fixed topology across folds,
 * MeanRisk's own CVXPY graph is reused for the rest of the objective × risk
   surface when the training shape is fixed,
 * closed-form estimators skip ``fit`` entirely,

@@ -7,7 +7,7 @@ replacement for :func:`skfolio.model_selection.cross_val_predict`.
 A call is compiled once into a :class:`~skfolio_accelerate.cv_plan.CVPlan`, then
 executed by one of several backends:
 
-* compact OSQP / Clarabel engines for a subset of
+* compact OSQP / HiGHS / Clarabel engines for a subset of
   :class:`~skfolio.optimization.MeanRisk`,
 * Parameterized reuse of skfolio's MeanRisk CVXPY problem when extra
   constraints keep a fixed training shape,
@@ -31,6 +31,7 @@ Examples
 
 from skfolio_accelerate.predict import (
     AccelerationReport,
+    AccelerationWarning,
     cross_val_predict,
     massive_cross_val_predict,
 )
@@ -43,6 +44,7 @@ from skfolio_accelerate.search import GridSearchResult, grid_search
 
 __all__ = [
     "AccelerationReport",
+    "AccelerationWarning",
     "GridSearchResult",
     "cross_val_predict",
     "grid_search",

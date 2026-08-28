@@ -6,10 +6,11 @@
     → backend (compact / sequential CVXPY / closed-form / fit-assemble / native)
     → fold weights → assembled Portfolio objects
 
-Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. EqualWeighted,
-Random, and default InverseVolatility use closed-form weights. Remaining
-serial estimators still call native ``fit``, then assemble test portfolios
-from ``weights_`` so they skip joblib, train/test copies, and ``predict()``.
+Compact OSQP, HiGHS, and Clarabel kernels accelerate a subset of MeanRisk.
+EqualWeighted, Random, and default InverseVolatility use closed-form weights.
+Remaining serial estimators still call native ``fit``, then assemble test
+portfolios from ``weights_`` so they skip joblib, train/test copies, and
+``predict()``.
 
 The accelerator never reinterprets an unsupported estimator as a nearby
 compact problem. Capability checks are the only gate; numerical engines assume
@@ -21,6 +22,7 @@ from __future__ import annotations
 import copy
 import os
 import time
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -59,6 +61,7 @@ from skfolio_accelerate.scoring import assemble_prediction, window_view
 
 BackendName = Literal[
     "osqp",
+    "highs",
     "clarabel",
     "cvxpy-sequential",
     "closed-form",
@@ -144,6 +147,16 @@ _PORTFOLIO_ATTRS = (
 )
 
 
+class AccelerationWarning(UserWarning):
+    """Issued when ``backend="auto"`` skips an engine that would not speed up.
+
+    CombinatorialPurgedCV with boxed MAD / FLPM falls back to native skfolio:
+    those LPs are large and not rolling, so a persistent HiGHS basis is slower
+    than Clarabel. Filter with ``warnings.filterwarnings`` if the notice is
+    noisy in a batch job.
+    """
+
+
 @dataclass
 class AccelerationReport:
     """Diagnostics for one :func:`cross_val_predict` or :func:`grid_search` call.
@@ -155,18 +168,22 @@ class AccelerationReport:
     Attributes
     ----------
     backend : str
-        Selected execution backend. One of ``"osqp"``, ``"clarabel"``,
-        ``"cvxpy-sequential"``, ``"closed-form"``, ``"fit-assemble"``,
-        ``"sklearn"``, or ``"compact-grid"``.
+        Selected execution backend. One of ``"osqp"``, ``"highs"``,
+        ``"clarabel"``, ``"cvxpy-sequential"``, ``"closed-form"``,
+        ``"fit-assemble"``, ``"sklearn"``, or ``"compact-grid"``.
 
         * ``"osqp"`` — compact mean-variance QP.
-        * ``"clarabel"`` — compact scenario LP / QP / SOCP / exponential cone.
+        * ``"highs"`` — compact scenario LP with persistent HiGHS simplex.
+        * ``"clarabel"`` — compact scenario QP / SOCP / exponential cone.
         * ``"cvxpy-sequential"`` — reuse skfolio's MeanRisk CVXPY problem.
         * ``"closed-form"`` — EqualWeighted, Random, or InverseVolatility.
         * ``"fit-assemble"`` — native ``fit`` with portfolio assembly from
           ``weights_``.
         * ``"sklearn"`` — unmodified skfolio ``cross_val_predict``.
-        * ``"compact-grid"`` — shared compact path inside :func:`grid_search`.
+          ``backend="auto"`` also selects this for boxed MAD/FLPM on
+          CombinatorialPurgedCV (persistent simplex is slower there) and emits
+          :class:`AccelerationWarning`.
+        * ``"compact-grid"`` — shared compact path inside :func:`grid_search``.
 
     n_solves : int, default=0
         Number of fold solves (compact, closed-form, or native ``fit``).
@@ -179,7 +196,7 @@ class AccelerationReport:
         ``X.T @ X``.
 
     n_warm_starts : int, default=0
-        Successful OSQP / Clarabel / CVXPY warm starts across folds.
+        Successful OSQP / HiGHS / Clarabel / CVXPY warm starts across folds.
 
     n_rebuilds : int, default=0
         CVXPY graphs compiled by sequential MeanRisk reuse.
@@ -289,8 +306,7 @@ class CallCapabilities:
         if self.can_compact:
             if type(estimator) in _CLOSED_FORM_TYPES:
                 return "closed-form"
-            risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
-            return "osqp" if risk is RiskMeasure.VARIANCE else "clarabel"
+            return _compact_backend_name(estimator)
         if self.can_sequential:
             return "cvxpy-sequential"
         if self.can_assemble:
@@ -340,6 +356,20 @@ def _cap_native_threads() -> None:
 
 def _nonzero(value: Any) -> bool:
     return bool(np.any(np.abs(np.asarray(value, dtype=float)) > 0))
+
+
+def _compact_backend_name(estimator) -> BackendName:
+    """OSQP, HiGHS, or Clarabel for a compact-eligible estimator."""
+    if type(estimator) in _CLOSED_FORM_TYPES:
+        return "closed-form"
+    risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
+    if risk is RiskMeasure.VARIANCE:
+        return "osqp"
+    from skfolio_accelerate.linear_lp import is_highs_lp_risk
+
+    if is_highs_lp_risk(estimator_spec(estimator)):
+        return "highs"
+    return "clarabel"
 
 
 def blocked_reason(estimator) -> str | None:
@@ -498,7 +528,9 @@ def compact_blocked_reason(
         return "entry_rebalancing_params uses skfolio cross_val_predict"
     if getattr(cv, "shuffle", False) is True:
         return "shuffled CV uses skfolio cross_val_predict"
-    return blocked_reason(estimator)
+    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+    return continuation_unhelpful_reason(estimator, cv) or blocked_reason(estimator)
 
 
 def assemble_blocked_reason(
@@ -573,7 +605,9 @@ def assemble_blocked_reason(
         return "raise_on_failure=False uses skfolio cross_val_predict"
     if getattr(estimator, "efficient_frontier_size", None) is not None:
         return "efficient_frontier_size uses skfolio cross_val_predict"
-    return None
+    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+    return continuation_unhelpful_reason(estimator, cv)
 
 
 def sequential_blocked_reason(
@@ -657,7 +691,9 @@ def sequential_blocked_reason(
     fallback = getattr(estimator, "fallback", None)
     if fallback not in (None, "previous_weights"):
         return "fallback estimator uses skfolio cross_val_predict"
-    return None
+    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+    return continuation_unhelpful_reason(estimator, cv)
 
 
 def classify_call(
@@ -1125,6 +1161,8 @@ def _skfolio_predict(
 def _choice_reason(backend: str, capabilities: CallCapabilities) -> str:
     if backend == "osqp":
         return "boxed MeanRisk variance; compact OSQP"
+    if backend == "highs":
+        return "boxed MeanRisk LP; persistent HiGHS simplex"
     if backend == "clarabel":
         return "boxed MeanRisk scenario risk; compact Clarabel"
     if backend == "closed-form":
@@ -1216,7 +1254,8 @@ def cross_val_predict(
     :class:`~skfolio_accelerate.cv_plan.CVPlan`, then executed by the first
     eligible backend:
 
-    1. compact OSQP (variance) or Clarabel (scenario risks) for a narrow
+    1. compact OSQP (variance), HiGHS (scenario LPs), or Clarabel
+       (scenario cones) for a narrow
        :class:`~skfolio.optimization.MeanRisk` subset,
     2. Parameterized CVXPY reuse for other MeanRisk configurations with a
        fixed problem shape,
@@ -1275,7 +1314,7 @@ def cross_val_predict(
         Entry-rebalancing metadata. Disables amortization when set.
 
     backend : {"auto", "compact", "cvxpy-sequential", "sklearn"}, default="auto"
-        Execution policy. ``"auto"`` selects OSQP, Clarabel, sequential
+        Execution policy. ``"auto"`` selects OSQP, HiGHS, Clarabel, sequential
         CVXPY, closed-form, fit-assemble, or skfolio. The other values are
         test/debug overrides.
 
@@ -1338,6 +1377,16 @@ def cross_val_predict(
         n_jobs=n_jobs,
         cv=cv,
     )
+    if backend == "auto":
+        from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+        native_lp = continuation_unhelpful_reason(estimator, cv)
+        if native_lp:
+            warnings.warn(
+                native_lp + ". Falling back to native skfolio cross_val_predict.",
+                AccelerationWarning,
+                stacklevel=2,
+            )
     if backend == "cvxpy-sequential" and not capabilities.can_sequential:
         raise ValueError(
             f"backend={backend!r} cannot reuse this MeanRisk problem: "
@@ -1503,9 +1552,7 @@ def cross_val_predict(
             name=type(estimator).__name__,
             portfolio_params=portfolio_params,
         )
-        backend_name: BackendName = (
-            "osqp" if spec.risk_measure is RiskMeasure.VARIANCE else "clarabel"
-        )
+        backend_name: BackendName = _compact_backend_name(estimator)
         report = _report_from_batch(
             backend_name,
             merged,

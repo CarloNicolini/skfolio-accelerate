@@ -106,7 +106,13 @@ def test_all_risk_measures_match_native_across_cv(risk_measure, cv_factory):
         atol=2e-4,
     )
     if estimator.risk_measure in COMPACT_RISKS:
-        assert report.backend in {"osqp", "clarabel", "fit-assemble", "sklearn"}
+        assert report.backend in {
+            "osqp",
+            "highs",
+            "clarabel",
+            "fit-assemble",
+            "sklearn",
+        }
         if report.backend in {"sklearn", "fit-assemble"}:
             assert report.fallback_reason is not None
     else:

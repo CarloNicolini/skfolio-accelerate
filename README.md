@@ -27,7 +27,8 @@ WalkForward, MultipleRandomizedCV, and CombinatorialPurgedCV:
 
 - overlapping training moments are updated from sufficient statistics;
 - boxed variance uses a compact OSQP QP reused across folds;
-- boxed scenario risks use a compact Clarabel cone;
+- boxed scenario LPs (MAD, CVaR, …) use a persistent HiGHS simplex basis;
+- other boxed scenario cones use a compact Clarabel problem;
 - other MeanRisk configurations reuse skfolio's own CVXPY problem
   (`mu`, scenario returns, and covariance square-root are `cp.Parameter`);
 - test portfolios are assembled from `weights_`.
@@ -46,7 +47,7 @@ problem:
 - It updates empirical moments as a training window moves.
 - It assembles CPCV training moments from fold blocks, including purge and
   embargo exclusions.
-- It reuses a compact OSQP or Clarabel problem shape for boxed MeanRisk.
+- It reuses a compact OSQP, HiGHS, or Clarabel problem shape for boxed MeanRisk.
 - It reuses skfolio's MeanRisk CVXPY graph across folds when extra options
   keep a fixed training length.
 - It scores compact hyperparameter candidates from weights before constructing
@@ -69,8 +70,8 @@ that already dominates the fold only shrinks by that same overhead.
 
 Leave `backend="auto"`. The policy picks the first eligible engine:
 
-1. compact OSQP (boxed variance) / Clarabel (boxed scenario) / closed-form
-   EqualWeighted, Random, or InverseVolatility;
+1. compact OSQP (boxed variance) / HiGHS (boxed LP) / Clarabel
+   (boxed scenario cones) / closed-form EqualWeighted, Random, or InverseVolatility;
 2. Parameterized CVXPY reuse (`cvxpy-sequential`) for other MeanRisk
    configurations with a fixed training shape;
 3. native `fit` plus assembly from `weights_`;
@@ -112,12 +113,21 @@ prediction, report = cross_val_predict(
 print(report.backend, report.reason)
 ```
 
-You do not pass an engine name in application code. `"osqp"`, `"clarabel"`,
-and `"cvxpy-sequential"` are the policy's choices, not a user setting.
+You do not pass an engine name in application code. `"osqp"`, `"highs"`,
+`"clarabel"`, and `"cvxpy-sequential"` are the policy's choices, not a user
+setting.
 `"sklearn"` means native skfolio was used; `report.reason` explains why. If a
 compact or sequential numerical solve cannot finish, the package retries with
 native `fit` and the assembled path rather than returning an
 accelerator-only failure.
+
+Boxed MAD and first lower partial moment on `CombinatorialPurgedCV` never
+enter HiGHS. Those training sets are block unions, not rolling windows: a
+persistent simplex basis was **slower** than native Clarabel on 20-year
+windows (~0.5×). `backend="auto"` emits `AccelerationWarning` and calls
+unmodified skfolio. CVaR and worst realization on CPCV stay on HiGHS.
+WalkForward and MultipleRandomizedCV keep HiGHS for all four boxed LPs
+(`l2_coef=0`).
 
 ## Checking a result
 
@@ -232,6 +242,24 @@ Sequential CPCV rebuilds (5 of 6 folds) of Ulcer and of
 graph is large, and a changing training length pays the construction cost
 again.
 
+### Boxed LPs with persistent HiGHS (`l2_coef=0`)
+
+Native skfolio vs `backend="auto"` on 5,040 × 20 synthetic daily returns.
+Sharpe is the mean of path Sharpes. MAD/FLPM on CPCV are **not** accelerated
+(see warning above); the rows below for those cells are the HiGHS experiment
+that motivated the native fallback.
+
+| Risk | WalkForward (228) | MRC (288) | CPCV (15) | Engine |
+|---|---:|---:|---:|---|
+| MAD | 6.5× | 6.8× | 0.51× (now native) | HiGHS / native |
+| First lower partial moment | 6.5× | 6.9× | 0.52× (now native) | HiGHS / native |
+| CVaR | 11.7× | 11.4× | 1.3× | HiGHS |
+| Worst realization | 12.6× | 13.5× | 3.6× | HiGHS |
+
+Mean path Sharpe matched native (typical Δ ~ 1e-6). CSV:
+`benchmarks/lp_cv_speedups_20y.csv`. Scripts:
+`experiments/parametric_lp_cv.py`, `benchmarks/benchmark_lp_cv.py`.
+
 On the small 120 × 6 suite every fold still pays CVXPY setup, so compact
 scenario risks look closer to variance. That ratio does not survive once the
 cone solve dominates. Closed-form EqualWeighted / Random / InverseVolatility
@@ -334,7 +362,7 @@ run, and whether native skfolio is allowed to use every core.
 Compare native skfolio to `backend="auto"` across every
 `ObjectiveFunction` × non-annualized `RiskMeasure` on WalkForward,
 MultipleRandomizedCV, and CombinatorialPurgedCV (the library picks OSQP,
-Clarabel, sequential CVXPY, or fit-assemble; you do not pass an engine name):
+HiGHS, Clarabel, sequential CVXPY, or fit-assemble; you do not pass an engine name):
 
 ```bash
 PYTHONPATH=src python benchmarks/benchmark_sequential_mean_risk.py --repeats 1

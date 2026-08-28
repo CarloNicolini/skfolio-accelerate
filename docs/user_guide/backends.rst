@@ -21,7 +21,7 @@ Backends and reports
 
 ``backend="auto"`` selects the first eligible engine:
 
-1. compact OSQP / Clarabel, or closed-form weights,
+1. compact OSQP / HiGHS / Clarabel, or closed-form weights,
 2. Parameterized CVXPY reuse for other MeanRisk configurations with a fixed
    training shape (``mu``, returns, and covariance square-root are
    ``cp.Parameter``; skfolio still builds every constraint),
@@ -29,8 +29,11 @@ Backends and reports
 4. unmodified skfolio.
 
 Ratio homogenization, transaction costs, custom CVXPY hooks, and MeanRisk
-subclasses stay on fit-assemble or native skfolio. You do not pass an engine
-name in application code.
+subclasses stay on fit-assemble or native skfolio. Boxed MAD and FLPM on
+:class:`~skfolio.model_selection.CombinatorialPurgedCV` also use native
+skfolio: a persistent simplex basis does not speed up non-rolling long
+training windows. The call emits :class:`~skfolio_accelerate.AccelerationWarning`.
+You do not pass an engine name in application code.
 
 Backend names
 *************
@@ -39,7 +42,8 @@ Backend names
 ``backend``             Meaning
 ======================  ============================================================
 ``osqp``                Compact mean-variance QP
-``clarabel``            Compact scenario LP / QP / SOCP / exponential cone
+``highs``               Compact scenario LP with persistent HiGHS simplex
+``clarabel``            Compact scenario QP / SOCP / exponential cone
 ``cvxpy-sequential``    Reuse skfolio's MeanRisk CVXPY problem across folds
 ``closed-form``         EqualWeighted, Random, or InverseVolatility weights
 ``fit-assemble``        Native ``fit`` + assembly from ``weights_``

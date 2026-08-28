@@ -90,7 +90,7 @@ def test_estimators_and_mean_risk_options_match_skfolio(estimator):
     pred, report = cross_val_predict(estimator, X, cv=cv, return_report=True)
     _assert_same_paths(pred, ref)
     if blocked_reason(estimator) is None:
-        assert report.backend in {"osqp", "clarabel", "closed-form"}
+        assert report.backend in {"osqp", "highs", "clarabel", "closed-form"}
     elif getattr(estimator, "needs_previous_weights", False):
         assert report.backend == "sklearn"
     elif isinstance(estimator, MeanRisk):
