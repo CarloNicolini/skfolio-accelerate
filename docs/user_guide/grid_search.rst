@@ -30,5 +30,16 @@ materialized into Portfolio objects.
 Every candidate must be compact-eligible. For general estimators use skfolio's
 ``OnlineGridSearch`` or sklearn's ``GridSearchCV``.
 
+If you stay on sklearn ``GridSearchCV`` / ``cross_val_score``, set
+``n_jobs=-1`` and pin solver threads to 1 (see :ref:`backends`). For
+exploratory native MeanRisk search, Clarabel
+``solver_params={"tol_gap_abs": 1e-4, "tol_gap_rel": 1e-4}`` cut a 252-day
+CVaR ``fit`` from 18.4 ms to 13.0 ms with unchanged weights; on 3-year and
+20-year windows the same change did not move wall time because CVXPY
+construction dominates. Compact :func:`grid_search` already shares one
+compiled OSQP / Clarabel problem at the tight default tolerances: eight
+``l2_coef`` candidates on a 20-year WalkForward were 34× faster than a
+native ``ParameterGrid`` with ``n_jobs=-1``.
+
 The returned :class:`GridSearchResult` also carries
 ``acceleration_report_`` with backend ``"compact-grid"``.

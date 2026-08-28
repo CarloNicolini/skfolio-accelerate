@@ -12,7 +12,9 @@ Methods, mathematics, and assumptions
    Formulations and eligibility gates may change between releases. Treat every
    accelerated result as provisional until you have compared it to native
    skfolio on the same workload. Prefer the native path whenever the problem
-   falls outside the documented compact subset.
+   falls outside the documented eligibility rules. Compact OSQP / Clarabel
+   mathematics is on this page; Parameterized MeanRisk reuse is described in
+   :ref:`backends`.
 
 This page explains *why* the library is faster, *what* mathematics it reuses,
 and *which* assumptions that reuse relies on. It does not change the investment

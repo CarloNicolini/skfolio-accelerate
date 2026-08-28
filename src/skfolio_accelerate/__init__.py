@@ -9,6 +9,8 @@ executed by one of several backends:
 
 * compact OSQP / Clarabel engines for a subset of
   :class:`~skfolio.optimization.MeanRisk`,
+* Parameterized reuse of skfolio's MeanRisk CVXPY problem when extra
+  constraints keep a fixed training shape,
 * closed-form weights for default
   :class:`~skfolio.optimization.EqualWeighted`,
   :class:`~skfolio.optimization.Random`, and

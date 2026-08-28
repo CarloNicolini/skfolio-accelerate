@@ -93,6 +93,8 @@ def test_estimators_and_mean_risk_options_match_skfolio(estimator):
         assert report.backend in {"osqp", "clarabel", "closed-form"}
     elif getattr(estimator, "needs_previous_weights", False):
         assert report.backend == "sklearn"
+    elif isinstance(estimator, MeanRisk):
+        assert report.backend in {"cvxpy-sequential", "fit-assemble"}
     else:
         assert report.backend == "fit-assemble"
 
@@ -230,19 +232,19 @@ def test_random_closed_form_skips_fit(monkeypatch):
 def test_fallback_estimators_assemble_from_native_fit():
     X = synthetic_returns(90, 5, seed=34)
     cv = WalkForward(train_size=40, test_size=10)
-    for estimator in (
-        HierarchicalRiskParity(),
-        RiskBudgeting(),
-        MeanRisk(min_return=1e-5),
-        MeanRisk(management_fees=1e-4),
-        MeanRisk(risk_measure=RiskMeasure.STANDARD_DEVIATION),
+    for estimator, expected in (
+        (HierarchicalRiskParity(), "fit-assemble"),
+        (RiskBudgeting(), "fit-assemble"),
+        (MeanRisk(min_return=1e-5), "cvxpy-sequential"),
+        (MeanRisk(management_fees=1e-4), "cvxpy-sequential"),
+        (MeanRisk(risk_measure=RiskMeasure.STANDARD_DEVIATION), "cvxpy-sequential"),
     ):
         ref = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
         pred, report = cross_val_predict(
             estimator, X, cv=cv, n_jobs=1, return_report=True
         )
         _assert_same_paths(pred, ref)
-        assert report.backend == "fit-assemble"
+        assert report.backend == expected
         assert report.n_solves == cv.get_n_splits(X)
 
 
@@ -261,7 +263,7 @@ def test_parallel_n_jobs_keeps_native_fallback():
     assert report.backend == "sklearn"
 
 
-def test_transaction_costs_stay_on_sequential_native_path():
+def test_transaction_costs_use_native_skfolio():
     X = synthetic_returns(72, 4, seed=36)
     cv = WalkForward(train_size=36, test_size=12)
     estimator = MeanRisk(transaction_costs=1e-4)

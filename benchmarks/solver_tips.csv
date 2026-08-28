@@ -1,0 +1,7 @@
+kind,label,n_cpus,time_s,n_jobs,thread_cap,n_rep,n_candidates,max_abs_weight_delta,speedup
+threads,MRC variance native n_jobs=-1 threads=1,4,1.185918,-1,1,,,,
+threads,MRC variance native n_jobs=-1 threads=4,4,1.187451,-1,4,,,,
+tolerance,CVaR MeanRisk.fit default Clarabel,4,0.026495907375192473,,,8,,,
+tolerance,CVaR MeanRisk.fit tol_gap=1e-4,4,0.026949912999953085,,,8,,0.0,0.9831537257741276
+grid,WalkForward ParameterGrid n_jobs=-1,4,4.723629950000031,,,,8,,
+grid,WalkForward compact grid_search,4,0.13819985800000723,,,,8,,34.17970190678332

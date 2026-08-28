@@ -8,7 +8,7 @@ User Guide
 
    **Experimental library.** ``skfolio-accelerate`` is research software.
    Prefer native skfolio whenever a workload falls outside the documented
-   compact subset, and compare results before relying on rankings or
+   eligibility rules, and compare results before relying on rankings or
    production signals. Details are in :ref:`methods`.
 
 `skfolio-accelerate` is a small companion library for
@@ -18,6 +18,8 @@ repeated work that does not change the portfolio problem:
 
 * overlapping empirical moments are updated from sufficient statistics,
 * compact OSQP / Clarabel engines reuse a fixed cone topology across folds,
+* MeanRisk's own CVXPY graph is reused for the rest of the objective × risk
+  surface when the training shape is fixed,
 * closed-form estimators skip ``fit`` entirely,
 * other serial optimizers still call native ``fit``, then assemble test
   portfolios from ``weights_``.

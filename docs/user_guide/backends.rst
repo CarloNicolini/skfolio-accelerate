@@ -6,6 +6,8 @@ Backends and reports
 
 .. currentmodule:: skfolio_accelerate
 
+.. currentmodule:: skfolio_accelerate
+
 .. warning::
 
    **Experimental.** Backend selection and fallback behaviour may evolve.
@@ -13,25 +15,41 @@ Backends and reports
    before trusting a new configuration. Mathematical assumptions are listed
    in :ref:`methods`.
 
-:func:`cross_val_predict` classifies each call once, then selects a backend.
+:func:`cross_val_predict` classifies each call once. Leave ``backend`` at
+``"auto"``; the library picks an engine and records it on
+:class:`AccelerationReport` (``report.backend`` and ``report.reason``).
+
+``backend="auto"`` selects the first eligible engine:
+
+1. compact OSQP / Clarabel, or closed-form weights,
+2. Parameterized CVXPY reuse for other MeanRisk configurations with a fixed
+   training shape (``mu``, returns, and covariance square-root are
+   ``cp.Parameter``; skfolio still builds every constraint),
+3. native ``fit`` plus assembly from ``weights_``,
+4. unmodified skfolio.
+
+Ratio homogenization, transaction costs, custom CVXPY hooks, and MeanRisk
+subclasses stay on fit-assemble or native skfolio. You do not pass an engine
+name in application code.
 
 Backend names
 *************
 
-=================  ============================================================
-``backend``        Meaning
-=================  ============================================================
-``osqp``           Compact mean-variance QP
-``clarabel``       Compact scenario LP / QP / SOCP / exponential cone
-``closed-form``    EqualWeighted, Random, or InverseVolatility weights
-``fit-assemble``   Native ``fit`` + assembly from ``weights_``
-``sklearn``        Unmodified skfolio ``cross_val_predict``
-``compact-grid``   Shared compact path inside :func:`grid_search`
-=================  ============================================================
+======================  ============================================================
+``backend``             Meaning
+======================  ============================================================
+``osqp``                Compact mean-variance QP
+``clarabel``            Compact scenario LP / QP / SOCP / exponential cone
+``cvxpy-sequential``    Reuse skfolio's MeanRisk CVXPY problem across folds
+``closed-form``         EqualWeighted, Random, or InverseVolatility weights
+``fit-assemble``        Native ``fit`` + assembly from ``weights_``
+``sklearn``             Unmodified skfolio ``cross_val_predict``
+``compact-grid``        Shared compact path inside :func:`grid_search`
+======================  ============================================================
 
 Force a policy with the keyword-only ``backend`` argument:
 
-* ``"auto"`` (default) — choose the best eligible path,
+* ``"auto"`` (default) — the order above,
 * ``"compact"`` — require compact / closed-form; raise if ineligible,
 * ``"sklearn"`` — always call native skfolio.
 
@@ -65,11 +83,45 @@ Inspect gates without running a backtest:
     assert caps.can_compact
     assert caps.can_assemble
 
-Compact and assemble are independent. A MeanRisk configuration may be
-ineligible for the cone engines yet still eligible for serial fit-assemble.
+Compact, sequential, and assemble are independent. A MeanRisk configuration
+may be ineligible for the cone engines yet still eligible for Parameterized
+CVXPY reuse or serial fit-assemble.
 
 .. danger::
 
     Do not reuse mutable estimator or solver state across unrelated calls
     without proving equivalence. All reuse in this package is local to one
     :func:`cross_val_predict` / :func:`grid_search` invocation.
+
+Parallel folds and solver threads
+*********************************
+
+Amortized backends require ``n_jobs in {None, 1}``. MRC paths and CPCV
+combinations are independent, so native skfolio can use joblib: pass
+``n_jobs=-1`` and this package forwards the call to unmodified skfolio.
+
+When you use that native path (or sklearn ``GridSearchCV`` /
+``cross_val_score``), cap solver-internal threads to 1 so workers do not
+oversubscribe cores:
+
+.. code-block:: python
+
+    import os
+    from skfolio.optimization import MeanRisk
+
+    for key in (
+        "OMP_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+    ):
+        os.environ.setdefault(key, "1")
+
+    estimator = MeanRisk(solver_params={"max_threads": 1})
+
+:func:`cross_val_predict` already sets those environment variables, and
+compact Clarabel uses ``max_threads=1``. On a 4-core 20-year MRC, native
+joblib is about 3.5× versus serial native. Serial compact OSQP still beats
+that parallel run by ~13×; serial compact CVaR only ties or slightly wins
+on MRC, and 45 independent CVaR cones prefer joblib. Sequential std and
+``MAXIMIZE_RATIO`` lose to ``n_jobs=-1``.

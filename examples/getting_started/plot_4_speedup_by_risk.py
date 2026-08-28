@@ -77,12 +77,12 @@ for label, risk in risks:
 # %%
 # Published long-workload WalkForward factors
 # -------------------------------------------
-# Median of three isolated-process runs on 5,040 × 20 synthetic daily returns
-# (Python 3.12, skfolio 1.0.0), as reported in the project README.
+# one isolated process on 5,040 × 20 synthetic daily returns
+# (Python 3.12, skfolio 1.0.0, n_jobs=1), as reported in the project README.
 published_labels = ["Variance", "Semi-variance", "MAD", "CVaR", "Max drawdown"]
-published_walk_forward = [60.6, 2.3, 2.3, 3.3, 2.2]
-published_mrc = [76.9, 3.0, 3.1, 4.1, 2.6]
-published_cpcv = [11.8, 0.98, 1.1, 1.1, 1.1]
+published_walk_forward = [46.7, 2.29, 2.40, 3.38, 2.11]
+published_mrc = [48.2, 3.05, 3.23, 4.33, 2.62]
+published_cpcv = [10.8, 0.97, 0.85, 1.05, 1.07]
 
 # %%
 # Plotly: live wall times and published speedup factors

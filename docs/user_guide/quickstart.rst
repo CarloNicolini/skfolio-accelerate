@@ -44,7 +44,8 @@ Pass ``return_report=True`` to learn which path ran:
         cv=cv,
         return_report=True,
     )
-    print(report.backend)  # "osqp", "clarabel", "closed-form", ...
+    print(report.backend)  # "osqp", "clarabel", "cvxpy-sequential", ...
+    print(report.reason)
     print(report)
 
 See :ref:`backends` for the full list of backends and eligibility rules.
@@ -52,18 +53,21 @@ See :ref:`backends` for the full list of backends and eligibility rules.
 What is accelerated
 *******************
 
-The fast path applies to:
+``backend="auto"`` covers every :class:`~skfolio.optimization.MeanRisk`
+``ObjectiveFunction`` × ``RiskMeasure`` pair, including WalkForward,
+MultipleRandomizedCV, and CombinatorialPurgedCV:
 
-* :class:`~skfolio.optimization.MeanRisk` with the default empirical prior,
-* minimize-risk or maximize-utility objectives,
-* a fixed equality budget, ordinary weight bounds, and optional L2
-  regularization,
-* variance (OSQP) and the supported scenario risks (Clarabel),
+* boxed variance uses compact OSQP; boxed scenario risks use compact Clarabel;
+* other MeanRisk configurations (standard deviation, Ulcer,
+  ``MAXIMIZE_RETURN``, risk limits, linear constraints, fees, L1, …) reuse
+  skfolio's CVXPY problem when the training shape is fixed;
+* ``MAXIMIZE_RATIO``, transaction costs, custom CVXPY hooks, and MeanRisk
+  subclasses stay on native ``fit`` plus assembly;
 * default :class:`~skfolio.optimization.EqualWeighted`,
   :class:`~skfolio.optimization.Random`, and default-empirical
-  :class:`~skfolio.optimization.InverseVolatility`.
+  :class:`~skfolio.optimization.InverseVolatility` use closed-form weights.
 
 Other serial :class:`~skfolio.optimization.BaseOptimization` estimators still
 call native ``fit``, then assemble portfolios from ``weights_``. Pipelines,
-sequential ``previous_weights``, ``raise_on_failure=False``, parallel
-``n_jobs``, and ``entry_rebalancing_params`` use unmodified skfolio.
+``raise_on_failure=False``, parallel ``n_jobs``, and
+``entry_rebalancing_params`` use unmodified skfolio.
