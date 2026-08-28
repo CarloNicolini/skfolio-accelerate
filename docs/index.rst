@@ -20,10 +20,12 @@ an existing backtest usually needs one import change:
 The result is still a skfolio :class:`~skfolio.portfolio.MultiPeriodPortfolio`
 or :class:`~skfolio.population.Population`.
 
-Internally a call is compiled once into a CV plan, then executed: overlapping
-training moments are updated from sufficient statistics, a compact OSQP or
-Clarabel engine reuses a fixed problem shape across folds, and test portfolios
-are assembled from ``weights_``.
+Internally a call is compiled once into a CV plan, then executed.
+``backend="auto"`` covers every ``ObjectiveFunction`` × ``RiskMeasure`` pair:
+overlapping training moments are updated from sufficient statistics, a compact
+OSQP or Clarabel engine reuses a fixed problem shape across folds, other
+MeanRisk configurations reuse skfolio's CVXPY problem when the training shape
+is fixed, and test portfolios are assembled from ``weights_``.
 
 .. toctree::
    :maxdepth: 2
