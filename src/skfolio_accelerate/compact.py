@@ -959,6 +959,8 @@ def make_compact_engine(
         raise ValueError(f"{risk.name} engine requires n_observations")
     from skfolio_accelerate.linear_lp import LinearHighs, is_highs_lp_risk
 
+    # MAD/FLPM on CombinatorialPurgedCV never call this: classify_call sends
+    # those to native skfolio. WalkForward/MRC boxed LPs with l2_coef=0 do.
     if is_highs_lp_risk(spec):
         return LinearHighs(spec, n_assets, n_observations)
     if risk is RiskMeasure.CVAR:

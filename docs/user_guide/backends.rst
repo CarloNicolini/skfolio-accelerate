@@ -29,8 +29,11 @@ Backends and reports
 4. unmodified skfolio.
 
 Ratio homogenization, transaction costs, custom CVXPY hooks, and MeanRisk
-subclasses stay on fit-assemble or native skfolio. You do not pass an engine
-name in application code.
+subclasses stay on fit-assemble or native skfolio. Boxed MAD and FLPM on
+:class:`~skfolio.model_selection.CombinatorialPurgedCV` also use native
+skfolio: a persistent simplex basis does not speed up non-rolling long
+training windows. The call emits :class:`~skfolio_accelerate.AccelerationWarning`.
+You do not pass an engine name in application code.
 
 Backend names
 *************

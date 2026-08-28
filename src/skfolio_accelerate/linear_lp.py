@@ -9,8 +9,13 @@ observations keep the same constraint rows and auxiliary variables.
 
 A rolling step of ``s`` then overwrites ``s`` scenario rows plus the mean
 equality, restores the previous basis, and reoptimizes. Dual/primal simplex
-typically needs far fewer pivots than fold 1. Non-overlapping windows still
-reuse the compiled sparsity pattern and attempt a basis warm start.
+typically needs far fewer pivots than fold 1.
+
+CombinatorialPurgedCV is the exception for MAD and FLPM: training sets are
+block unions, not slides, so the previous vertex is not nearby. On that
+splitter ``backend="auto"`` warns and uses native skfolio instead of HiGHS.
+CVaR and worst realization stay on HiGHS even for CPCV (they were not slower
+than native in the same study).
 """
 
 from __future__ import annotations
@@ -32,11 +37,53 @@ _LP_RISKS = frozenset(
         RiskMeasure.WORST_REALIZATION,
     }
 )
+# CombinatorialPurgedCV trains on unions of blocks, not a sliding window.
+# Persistent dual simplex then restarts from a distant basis on a large LP
+# (T ~ thousands). On 5,040 × 20 MAD/FLPM that was 0.51× vs native Clarabel;
+# CVaR and worst realization stayed at or above 1× and keep HiGHS.
+_CPCV_NATIVE_LP_RISKS = frozenset(
+    {
+        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+    }
+)
 
 
 def is_highs_lp_risk(spec: MeanRiskSpec) -> bool:
     """True when the compact problem is a pure LP that HiGHS should solve."""
     return spec.risk_measure in _LP_RISKS and float(spec.l2_coef) == 0.0
+
+
+def continuation_unhelpful_reason(estimator, cv) -> str | None:
+    """Why this call should use native skfolio instead of persistent HiGHS.
+
+    WalkForward and MultipleRandomizedCV slide a fixed-length window, so
+    circular scenario slots plus the previous simplex basis cut later-fold
+    pivots (about 6–13× vs native on 20-year MAD/CVaR). CombinatorialPurgedCV
+    does not: each training set is a different block union. Importing the
+    previous MAD/FLPM basis then needs as many pivots as a cold start, and
+    HiGHS simplex with presolve off loses to native Clarabel on long ``T``.
+
+    Returns
+    -------
+    reason : str or None
+        A stable phrase used as ``compact_reason`` / ``sequential_reason`` /
+        ``assemble_reason`` so ``backend="auto"`` selects unmodified skfolio.
+        ``None`` when HiGHS continuation is the intended engine.
+    """
+    if cv is None or type(cv).__name__ != "CombinatorialPurgedCV":
+        return None
+    if type(estimator).__name__ not in {"MeanRisk", "ParametricMeanRisk"}:
+        return None
+    if float(getattr(estimator, "l2_coef", 0.0) or 0.0) != 0.0:
+        return None
+    risk = getattr(estimator, "risk_measure", None)
+    if risk not in _CPCV_NATIVE_LP_RISKS:
+        return None
+    return (
+        "CombinatorialPurgedCV MAD/FLPM uses native skfolio: a persistent "
+        "simplex basis does not speed up non-rolling long training windows"
+    )
 
 
 def rolling_shift(previous: NDArray[np.float64], current: NDArray[np.float64]) -> int | None:
@@ -291,6 +338,10 @@ class LinearHighs:
         shift = (
             rolling_shift(self._returns, returns) if self._returns is not None else None
         )
+        # A detected roll of s overwrites s slots and keeps the previous basis.
+        # No roll (CPCV block unions, KFold, first fold): rewrite every r_t.
+        # WalkForward/MRC are gated onto this engine because that roll exists.
+        # CPCV MAD/FLPM never reach here; see continuation_unhelpful_reason.
         if shift is None:
             self._bind_full(returns, mu)
         else:

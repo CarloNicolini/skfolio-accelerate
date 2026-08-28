@@ -21,6 +21,7 @@ from __future__ import annotations
 import copy
 import os
 import time
+import warnings
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -145,6 +146,16 @@ _PORTFOLIO_ATTRS = (
 )
 
 
+class AccelerationWarning(UserWarning):
+    """Issued when ``backend="auto"`` skips an engine that would not speed up.
+
+    CombinatorialPurgedCV with boxed MAD / FLPM falls back to native skfolio:
+    those LPs are large and not rolling, so a persistent HiGHS basis is slower
+    than Clarabel. Filter with ``warnings.filterwarnings`` if the notice is
+    noisy in a batch job.
+    """
+
+
 @dataclass
 class AccelerationReport:
     """Diagnostics for one :func:`cross_val_predict` or :func:`grid_search` call.
@@ -168,6 +179,9 @@ class AccelerationReport:
         * ``"fit-assemble"`` — native ``fit`` with portfolio assembly from
           ``weights_``.
         * ``"sklearn"`` — unmodified skfolio ``cross_val_predict``.
+          ``backend="auto"`` also selects this for boxed MAD/FLPM on
+          CombinatorialPurgedCV (persistent simplex is slower there) and emits
+          :class:`AccelerationWarning`.
         * ``"compact-grid"`` — shared compact path inside :func:`grid_search``.
 
     n_solves : int, default=0
@@ -513,7 +527,9 @@ def compact_blocked_reason(
         return "entry_rebalancing_params uses skfolio cross_val_predict"
     if getattr(cv, "shuffle", False) is True:
         return "shuffled CV uses skfolio cross_val_predict"
-    return blocked_reason(estimator)
+    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+    return continuation_unhelpful_reason(estimator, cv) or blocked_reason(estimator)
 
 
 def assemble_blocked_reason(
@@ -588,7 +604,9 @@ def assemble_blocked_reason(
         return "raise_on_failure=False uses skfolio cross_val_predict"
     if getattr(estimator, "efficient_frontier_size", None) is not None:
         return "efficient_frontier_size uses skfolio cross_val_predict"
-    return None
+    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+    return continuation_unhelpful_reason(estimator, cv)
 
 
 def sequential_blocked_reason(
@@ -672,7 +690,9 @@ def sequential_blocked_reason(
     fallback = getattr(estimator, "fallback", None)
     if fallback not in (None, "previous_weights"):
         return "fallback estimator uses skfolio cross_val_predict"
-    return None
+    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+    return continuation_unhelpful_reason(estimator, cv)
 
 
 def classify_call(
@@ -1356,6 +1376,16 @@ def cross_val_predict(
         n_jobs=n_jobs,
         cv=cv,
     )
+    if backend == "auto":
+        from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
+
+        native_lp = continuation_unhelpful_reason(estimator, cv)
+        if native_lp:
+            warnings.warn(
+                native_lp + ". Falling back to native skfolio cross_val_predict.",
+                AccelerationWarning,
+                stacklevel=2,
+            )
     if backend == "cvxpy-sequential" and not capabilities.can_sequential:
         raise ValueError(
             f"backend={backend!r} cannot reuse this MeanRisk problem: "

@@ -188,9 +188,20 @@ def main() -> None:
                 }
             )
             if report.backend != "highs":
-                raise SystemExit(
-                    f"expected highs, got {report.backend!r} for {cv_name}/{risk.name}"
+                native_ok = (
+                    cv_name == "purged-cpcv"
+                    and risk
+                    in {
+                        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+                        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+                    }
+                    and report.backend == "sklearn"
                 )
+                if not native_ok:
+                    raise SystemExit(
+                        f"expected highs, got {report.backend!r} "
+                        f"for {cv_name}/{risk.name}"
+                    )
     args.csv.parent.mkdir(parents=True, exist_ok=True)
     with args.csv.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=_FIELDNAMES, extrasaction="ignore")

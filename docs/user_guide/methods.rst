@@ -162,10 +162,17 @@ The compact HiGHS engine keeps an auxiliary portfolio-mean variable (MAD /
 FLPM) or stores raw ``r_t`` (CVaR / worst realization). Overlapping
 observations keep the same constraint rows and slack variables. A rolling step
 of ``s`` overwrites ``s`` scenario rows plus the mean equality, restores the
-previous optimal basis, and reoptimizes. Later folds therefore do
-``T_{\mathrm{fold}}^{(k+1)} \ll T_{\mathrm{fold}}^{(1)}`` in simplex
-iterations. Non-overlapping splitters still reuse the compiled sparsity
-pattern.
+previous optimal basis, and reoptimizes. Later WalkForward / MRC folds
+therefore do ``T_{\mathrm{fold}}^{(k+1)} \ll T_{\mathrm{fold}}^{(1)}`` in
+simplex iterations.
+
+CombinatorialPurgedCV is different. Training sets are unions of blocks, not a
+slide of ``s`` rows, so the previous MAD/FLPM basis is not a nearby vertex.
+On 5,040 × 20 synthetic returns that persistent simplex was **0.51×** versus
+native Clarabel. ``backend="auto"`` therefore emits
+:class:`~skfolio_accelerate.AccelerationWarning` and uses unmodified skfolio
+for boxed MAD and FLPM on CombinatorialPurgedCV. CVaR and worst realization
+stay on HiGHS (they were not slower than native in the same study).
 
 A diagonal ``l2_coef`` term makes the same measures QPs; those stay on
 Clarabel.

@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from skfolio import RiskMeasure
-from skfolio.model_selection import WalkForward
+from skfolio.model_selection import CombinatorialPurgedCV, WalkForward
 from skfolio.optimization import MeanRisk
 from sklearn.model_selection import KFold
 
-from skfolio_accelerate import cross_val_predict
+from skfolio_accelerate import AccelerationWarning, cross_val_predict
 from skfolio_accelerate.compact import estimator_spec, make_compact_engine
 from skfolio_accelerate.linear_lp import LinearHighs, rolling_shift
 from skfolio_accelerate.moments import empirical_from_window
@@ -77,3 +78,32 @@ def test_disjoint_kfold_still_solves_mad():
     )
     assert report.backend == "highs"
     assert len(pred) == 3
+
+
+def test_cpcv_mad_falls_back_to_native_skfolio():
+    """Non-rolling MAD LPs are slower with HiGHS; auto uses native skfolio."""
+    X = synthetic_returns(96, 6, seed=12)
+    cv = CombinatorialPurgedCV(n_folds=4, n_test_folds=2, purged_size=1, embargo_size=1)
+    with pytest.warns(AccelerationWarning, match="native skfolio"):
+        _, report = cross_val_predict(
+            MeanRisk(risk_measure=RiskMeasure.MEAN_ABSOLUTE_DEVIATION),
+            X,
+            cv=cv,
+            n_jobs=1,
+            return_report=True,
+        )
+    assert report.backend == "sklearn"
+    assert "CombinatorialPurgedCV" in (report.reason or report.fallback_reason or "")
+
+
+def test_cpcv_cvar_stays_on_highs():
+    X = synthetic_returns(96, 6, seed=13)
+    cv = CombinatorialPurgedCV(n_folds=4, n_test_folds=2, purged_size=1, embargo_size=1)
+    _, report = cross_val_predict(
+        MeanRisk(risk_measure=RiskMeasure.CVAR),
+        X,
+        cv=cv,
+        n_jobs=1,
+        return_report=True,
+    )
+    assert report.backend == "highs"

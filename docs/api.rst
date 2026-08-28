@@ -32,6 +32,7 @@ Classes
     :template: class.rst
 
     AccelerationReport
+    AccelerationWarning
 
 .. currentmodule:: skfolio_accelerate.predict
 
@@ -207,6 +208,32 @@ Functions
 
     estimator_spec
     make_compact_engine
+
+.. _linear_lp_ref:
+
+:mod:`skfolio_accelerate.linear_lp`: Persistent HiGHS LPs
+=========================================================
+
+.. automodule:: skfolio_accelerate.linear_lp
+    :no-members:
+    :no-inherited-members:
+
+.. currentmodule:: skfolio_accelerate.linear_lp
+
+.. autosummary::
+    :nosignatures:
+    :toctree: generated/
+    :template: class.rst
+
+    LinearHighs
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    is_highs_lp_risk
+    continuation_unhelpful_reason
+    rolling_shift
 
 .. _flagship_ref:
 

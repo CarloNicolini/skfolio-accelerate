@@ -121,6 +121,14 @@ compact or sequential numerical solve cannot finish, the package retries with
 native `fit` and the assembled path rather than returning an
 accelerator-only failure.
 
+Boxed MAD and first lower partial moment on `CombinatorialPurgedCV` never
+enter HiGHS. Those training sets are block unions, not rolling windows: a
+persistent simplex basis was **slower** than native Clarabel on 20-year
+windows (~0.5×). `backend="auto"` emits `AccelerationWarning` and calls
+unmodified skfolio. CVaR and worst realization on CPCV stay on HiGHS.
+WalkForward and MultipleRandomizedCV keep HiGHS for all four boxed LPs
+(`l2_coef=0`).
+
 ## Checking a result
 
 Use native skfolio as the reference when validating a new workload. Numerical
@@ -233,6 +241,24 @@ Sequential CPCV rebuilds (5 of 6 folds) of Ulcer and of
 `MAXIMIZE_RETURN` EVaR / EDaR are **0.09–0.14×** versus native: the compiled
 graph is large, and a changing training length pays the construction cost
 again.
+
+### Boxed LPs with persistent HiGHS (`l2_coef=0`)
+
+Native skfolio vs `backend="auto"` on 5,040 × 20 synthetic daily returns.
+Sharpe is the mean of path Sharpes. MAD/FLPM on CPCV are **not** accelerated
+(see warning above); the rows below for those cells are the HiGHS experiment
+that motivated the native fallback.
+
+| Risk | WalkForward (228) | MRC (288) | CPCV (15) | Engine |
+|---|---:|---:|---:|---|
+| MAD | 6.5× | 6.8× | 0.51× (now native) | HiGHS / native |
+| First lower partial moment | 6.5× | 6.9× | 0.52× (now native) | HiGHS / native |
+| CVaR | 11.7× | 11.4× | 1.3× | HiGHS |
+| Worst realization | 12.6× | 13.5× | 3.6× | HiGHS |
+
+Mean path Sharpe matched native (typical Δ ~ 1e-6). CSV:
+`benchmarks/lp_cv_speedups_20y.csv`. Scripts:
+`experiments/parametric_lp_cv.py`, `benchmarks/benchmark_lp_cv.py`.
 
 On the small 120 × 6 suite every fold still pays CVXPY setup, so compact
 scenario risks look closer to variance. That ratio does not survive once the

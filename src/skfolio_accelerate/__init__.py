@@ -31,6 +31,7 @@ Examples
 
 from skfolio_accelerate.predict import (
     AccelerationReport,
+    AccelerationWarning,
     cross_val_predict,
     massive_cross_val_predict,
 )
@@ -43,6 +44,7 @@ from skfolio_accelerate.search import GridSearchResult, grid_search
 
 __all__ = [
     "AccelerationReport",
+    "AccelerationWarning",
     "GridSearchResult",
     "cross_val_predict",
     "grid_search",
