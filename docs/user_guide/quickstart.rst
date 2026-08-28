@@ -39,7 +39,7 @@ Pass ``return_report=True`` to learn which path ran:
         cv=cv,
         return_report=True,
     )
-    print(report.backend)  # "osqp", "clarabel", "closed-form", ...
+    print(report.backend)  # "osqp", "clarabel", "cvxpy-sequential", "closed-form", ...
     print(report)
 
 See :ref:`backends` for the full list of backends and eligibility rules.
@@ -59,6 +59,9 @@ The fast path applies to:
   :class:`~skfolio.optimization.InverseVolatility`.
 
 Other serial :class:`~skfolio.optimization.BaseOptimization` estimators still
-call native ``fit``, then assemble portfolios from ``weights_``. Pipelines,
-sequential ``previous_weights``, ``raise_on_failure=False``, parallel
+call native ``fit``, then assemble portfolios from ``weights_``. MeanRisk
+configurations outside the boxed compact subset (ratio objectives, risk
+limits, linear constraints, transaction costs, Gini, Ulcer, standard
+deviation, ...) reuse the original CVXPY problem across folds when the
+shape is unchanged. Pipelines, ``raise_on_failure=False``, parallel
 ``n_jobs``, and ``entry_rebalancing_params`` use unmodified skfolio.

@@ -3,7 +3,7 @@
 A call is classified once, then executed as:
 
     CV definition → compiled :class:`~skfolio_accelerate.cv_plan.CVPlan`
-    → backend (compact / closed-form / fit-assemble / native)
+    → backend (compact / sequential CVXPY / closed-form / fit-assemble / native)
     → fold weights → assembled Portfolio objects
 
 Compact OSQP/Clarabel kernels accelerate a subset of MeanRisk. EqualWeighted,
@@ -46,6 +46,7 @@ from sklearn.pipeline import Pipeline
 from skfolio_accelerate._arrays import as_float_2d, as_float_array
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec, estimator_spec
 from skfolio_accelerate.cv_plan import CVPlan, FoldSpec, compile_cv_plan
+from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import (
     PathMomentSession,
     is_default_empirical,
@@ -56,10 +57,12 @@ from skfolio_accelerate.scoring import assemble_prediction, window_view
 BackendName = Literal[
     "osqp",
     "clarabel",
+    "cvxpy-sequential",
     "closed-form",
     "fit-assemble",
     "sklearn",
     "compact-grid",
+    "sequential-grid",
 ]
 
 _SUPPORTED_OBJECTIVES = frozenset(
@@ -156,14 +159,19 @@ class AccelerationReport:
 
         * ``"osqp"`` — compact mean-variance QP.
         * ``"clarabel"`` — compact scenario LP / QP / SOCP / exponential cone.
+        * ``"cvxpy-sequential"`` — skfolio MeanRisk CVXPY graph reused across
+          folds via Parameters (full constraint set).
         * ``"closed-form"`` — EqualWeighted, Random, or InverseVolatility.
         * ``"fit-assemble"`` — native ``fit`` with portfolio assembly from
           ``weights_``.
         * ``"sklearn"`` — unmodified skfolio ``cross_val_predict``.
         * ``"compact-grid"`` — shared compact path inside :func:`grid_search`.
+        * ``"sequential-grid"`` — Parameterized MeanRisk grid inside
+          :func:`grid_search`.
 
     n_solves : int, default=0
-        Number of fold solves (compact, closed-form, or native ``fit``).
+        Number of fold solves (compact, closed-form, sequential, or native
+        ``fit``).
 
     n_prior_fits : int, default=0
         Cold Gram / sufficient-statistic computations in the moment cache.
@@ -173,7 +181,13 @@ class AccelerationReport:
         ``X.T @ X``.
 
     n_warm_starts : int, default=0
-        Successful OSQP / Clarabel warm starts across folds.
+        Successful OSQP / Clarabel / CVXPY warm starts across folds.
+
+    n_rebuilds : int, default=0
+        CVXPY graphs compiled by the sequential MeanRisk adapter.
+
+    is_dpp : bool or None, default=None
+        Whether the last compiled sequential problem reported as DPP.
 
     fallback_reason : str or None, default=None
         Human-readable reason when the preferred compact path was not used, or
@@ -203,6 +217,8 @@ class AccelerationReport:
     n_prior_fits: int = 0
     n_prior_updates: int = 0
     n_warm_starts: int = 0
+    n_rebuilds: int = 0
+    is_dpp: bool | None = None
     fallback_reason: str | None = None
     moments_s: float = 0.0
     solve_s: float = 0.0
@@ -218,8 +234,10 @@ class AccelerationReport:
             f"Moment fits: {self.n_prior_fits}",
             f"Moment updates: {self.n_prior_updates}",
             f"Warm starts: {self.n_warm_starts}",
+            f"Rebuilds: {self.n_rebuilds}",
             f"moments {self.moments_s:.4f}s  solve {self.solve_s:.4f}s  "
             f"eval {self.eval_s:.4f}s  wall {self.wall_s:.4f}s",
+            f"DPP: {self.is_dpp}",
             f"Fallback: {self.fallback_reason or 'none'}",
         ]
         if self.baseline_s > 0:
@@ -233,17 +251,23 @@ class AccelerationReport:
 class CallCapabilities:
     """What this ``cross_val_predict`` call is allowed to skip.
 
-    ``compact_reason`` and ``assemble_reason`` are independent. A MeanRisk
-    configuration may be ineligible for the cone engines yet still eligible
-    for serial native ``fit`` plus weight assembly.
+    ``compact_reason``, ``sequential_reason``, and ``assemble_reason`` are
+    independent. A MeanRisk configuration may be ineligible for the cone
+    engines yet still eligible for Parameterized CVXPY reuse or for serial
+    native ``fit`` plus weight assembly.
     """
 
     compact_reason: str | None
+    sequential_reason: str | None
     assemble_reason: str | None
 
     @property
     def can_compact(self) -> bool:
         return self.compact_reason is None
+
+    @property
+    def can_sequential(self) -> bool:
+        return self.sequential_reason is None
 
     @property
     def can_assemble(self) -> bool:
@@ -264,6 +288,12 @@ class FoldBatchResult:
 
     n_solves, n_warm_starts, n_prior_fits, n_prior_updates : int, default=0
         Accounting counters aggregated into :class:`AccelerationReport`.
+
+    n_rebuilds : int, default=0
+        Sequential CVXPY graphs compiled in this batch.
+
+    is_dpp : bool or None, default=None
+        DPP flag reported by the sequential adapter, when available.
     """
 
     weights: dict[int, NDArray[np.float64]]
@@ -273,6 +303,8 @@ class FoldBatchResult:
     n_warm_starts: int = 0
     n_prior_fits: int = 0
     n_prior_updates: int = 0
+    n_rebuilds: int = 0
+    is_dpp: bool | None = None
 
 
 def _cap_native_threads() -> None:
@@ -523,6 +555,64 @@ def assemble_blocked_reason(
     return None
 
 
+def sequential_blocked_reason(
+    estimator,
+    *,
+    method: str = "predict",
+    params: dict | None = None,
+    column_indices=None,
+    entry_rebalancing_params: dict | None = None,
+    n_jobs: int | None = None,
+    cv=None,
+) -> str | None:
+    """Why this call cannot reuse a Parameterized MeanRisk CVXPY problem.
+
+    Sequential reuse keeps skfolio's full constraint set. It is blocked for
+    pipelines, non-MeanRisk estimators, custom CVXPY hooks that close over a
+    window, fallback estimators other than ``"previous_weights"``, and the
+    same call-level options that force native skfolio (parallel ``n_jobs``,
+    shuffled CV, ``efficient_frontier_size``, ...).
+
+    Transaction costs, turnover, and ``previous_weights`` are allowed: they
+    are economic state updated as Parameters, not a reason to leave the
+    sequential path.
+    """
+    if method != "predict":
+        return "only method='predict' is sequential"
+    if params:
+        return "fit params use skfolio cross_val_predict"
+    if column_indices is not None:
+        return "column_indices uses skfolio cross_val_predict"
+    if entry_rebalancing_params is not None:
+        return "entry_rebalancing_params uses skfolio cross_val_predict"
+    if n_jobs not in (None, 1):
+        return "n_jobs!=1 uses skfolio cross_val_predict"
+    if getattr(cv, "shuffle", False) is True:
+        return "shuffled CV uses skfolio cross_val_predict"
+    if isinstance(estimator, Pipeline):
+        return "pipelines use skfolio cross_val_predict"
+    if not isinstance(estimator, MeanRisk):
+        return f"estimator {type(estimator).__name__} is not MeanRisk"
+    if getattr(estimator, "raise_on_failure", True) is not True:
+        return "raise_on_failure=False uses skfolio cross_val_predict"
+    if getattr(estimator, "efficient_frontier_size", None) is not None:
+        return "efficient_frontier_size uses skfolio cross_val_predict"
+    if getattr(estimator, "add_constraints", None) is not None:
+        return "add_constraints uses fit-assemble"
+    if getattr(estimator, "add_objective", None) is not None:
+        return "add_objective uses fit-assemble"
+    if getattr(estimator, "overwrite_expected_return", None) is not None:
+        return "overwrite_expected_return uses fit-assemble"
+    if getattr(estimator, "mu_uncertainty_set_estimator", None) is not None:
+        return "mu uncertainty sets use fit-assemble"
+    if getattr(estimator, "covariance_uncertainty_set_estimator", None) is not None:
+        return "covariance uncertainty sets use fit-assemble"
+    fallback = getattr(estimator, "fallback", None)
+    if fallback not in (None, "previous_weights"):
+        return "fallback estimator uses skfolio cross_val_predict"
+    return None
+
+
 def classify_call(
     estimator,
     *,
@@ -534,11 +624,12 @@ def classify_call(
     n_jobs: int | None = None,
     cv=None,
 ) -> CallCapabilities:
-    """Map estimator and call options to compact / assemble eligibility.
+    """Map estimator and call options to compact / sequential / assemble
+    eligibility.
 
-    Compact and assemble gates are independent. A MeanRisk configuration may be
-    ineligible for the cone engines yet still eligible for serial native ``fit``
-    plus weight assembly.
+    The three gates are independent. A MeanRisk configuration may be ineligible
+    for the cone engines yet still eligible for Parameterized CVXPY reuse or
+    for serial native ``fit`` plus weight assembly.
 
     Parameters
     ----------
@@ -551,8 +642,7 @@ def classify_call(
     Returns
     -------
     capabilities : CallCapabilities
-        Independent compact and assemble reasons. Use
-        ``capabilities.can_compact`` / ``capabilities.can_assemble``.
+        Independent compact, sequential, and assemble reasons.
 
     Examples
     --------
@@ -568,6 +658,15 @@ def classify_call(
             params=params,
             column_indices=column_indices,
             entry_rebalancing_params=entry_rebalancing_params,
+            cv=cv,
+        ),
+        sequential_reason=sequential_blocked_reason(
+            estimator,
+            method=method,
+            params=params,
+            column_indices=column_indices,
+            entry_rebalancing_params=entry_rebalancing_params,
+            n_jobs=n_jobs,
             cv=cv,
         ),
         assemble_reason=assemble_blocked_reason(
@@ -597,7 +696,8 @@ def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
     """
     weights: dict[int, NDArray[np.float64]] = {}
     moments_s = solve_s = 0.0
-    n_solves = n_warm = n_fits = n_updates = 0
+    n_solves = n_warm = n_fits = n_updates = n_rebuilds = 0
+    is_dpp: bool | None = None
     for part in parts:
         weights.update(part.weights)
         moments_s += part.moments_s
@@ -606,6 +706,9 @@ def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
         n_warm += part.n_warm_starts
         n_fits += part.n_prior_fits
         n_updates += part.n_prior_updates
+        n_rebuilds += part.n_rebuilds
+        if part.is_dpp is not None:
+            is_dpp = part.is_dpp if is_dpp is None else bool(is_dpp and part.is_dpp)
     return FoldBatchResult(
         weights=weights,
         moments_s=moments_s,
@@ -614,6 +717,8 @@ def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
         n_warm_starts=n_warm,
         n_prior_fits=n_fits,
         n_prior_updates=n_updates,
+        n_rebuilds=n_rebuilds,
+        is_dpp=is_dpp,
     )
 
 
@@ -677,6 +782,66 @@ def solve_compact_folds(
         n_warm_starts=n_warm,
         n_prior_fits=int(session.cache.n_fits),
         n_prior_updates=int(session.cache.n_updates),
+    )
+
+
+def _train_slice(X, x_arr: np.ndarray, fold: FoldSpec):
+    """Training window, preserving DataFrame columns when ``X`` has ``iloc``."""
+    if hasattr(X, "iloc"):
+        rows = X.iloc[np.asarray(fold.train_idx)]
+        if fold.asset_idx is not None:
+            return rows.iloc[:, np.asarray(fold.asset_idx)]
+        return rows
+    return window_view(x_arr, fold.train_idx, fold.asset_idx)
+
+
+def solve_sequential_folds(
+    estimator,
+    X,
+    x_arr: np.ndarray,
+    y_arr: np.ndarray | None,
+    folds: Sequence[FoldSpec],
+    *,
+    cache: SequentialProblemCache | None = None,
+    path_id: int = 0,
+) -> FoldBatchResult:
+    """Solve one path batch with a Parameterized MeanRisk CVXPY problem.
+
+    The first fold compiles skfolio's full constraint graph. Later folds with
+    the same topology update ``cp.Parameter`` values and warm-start.
+    """
+    cache = SequentialProblemCache(estimator) if cache is None else cache
+    adapter = cache.get(path_id)
+    warm_before = adapter.n_warm_starts
+    rebuild_before = adapter.n_rebuilds
+    weights: dict[int, NDArray[np.float64]] = {}
+    solve_s = 0.0
+    previous: NDArray[np.float64] | None = None
+    needs_prev = bool(getattr(adapter, "needs_previous_weights", False))
+    n_assets = int(x_arr.shape[1])
+    for fold in folds:
+        if needs_prev and previous is not None:
+            adapter.set_params(previous_weights=previous)
+        x_train = _train_slice(X, x_arr, fold)
+        y_train = _train_target(y_arr, fold, n_assets)
+        started = time.perf_counter()
+        if y_train is None:
+            adapter.fit(x_train)
+        else:
+            adapter.fit(x_train, y_train)
+        fitted = np.asarray(adapter.weights_, dtype=np.float64)
+        if fitted.ndim != 1:
+            raise ValueError("2-dimensional weights_ cannot be assembled")
+        weights[fold.fold_id] = np.ascontiguousarray(fitted)
+        previous = weights[fold.fold_id]
+        solve_s += time.perf_counter() - started
+    return FoldBatchResult(
+        weights=weights,
+        solve_s=solve_s,
+        n_solves=len(folds),
+        n_warm_starts=adapter.n_warm_starts - warm_before,
+        n_rebuilds=adapter.n_rebuilds - rebuild_before,
+        is_dpp=adapter.is_dpp_,
     )
 
 
@@ -903,6 +1068,8 @@ def _report_from_batch(
         n_prior_fits=int(merged.n_prior_fits),
         n_prior_updates=int(merged.n_prior_updates),
         n_warm_starts=int(merged.n_warm_starts),
+        n_rebuilds=int(merged.n_rebuilds),
+        is_dpp=merged.is_dpp,
         fallback_reason=fallback_reason,
         moments_s=float(merged.moments_s),
         solve_s=float(merged.solve_s),
@@ -954,9 +1121,11 @@ def cross_val_predict(
        :class:`~skfolio.optimization.MeanRisk` subset,
     2. closed-form weights for default EqualWeighted / Random /
        InverseVolatility,
-    3. native ``fit`` plus assembly from ``weights_`` for other serial
+    3. Parameterized CVXPY reuse for other MeanRisk configurations that keep
+       a fixed problem shape (full constraint set),
+    4. native ``fit`` plus assembly from ``weights_`` for other serial
        optimizers,
-    4. unmodified skfolio when options or estimators require it.
+    5. unmodified skfolio when options or estimators require it.
 
     Parameters
     ----------
@@ -1003,12 +1172,15 @@ def cross_val_predict(
     entry_rebalancing_params : dict, optional
         Entry-rebalancing metadata. Disables amortization when set.
 
-    backend : {"auto", "compact", "sklearn"}, default="auto"
+    backend : {"auto", "compact", "cvxpy-sequential", "sklearn"}, default="auto"
         Execution policy.
 
-        * ``"auto"`` — choose compact, closed-form, fit-assemble, or skfolio.
+        * ``"auto"`` — choose compact, sequential CVXPY, closed-form,
+          fit-assemble, or skfolio.
         * ``"compact"`` — require the compact / closed-form path; raise if
           ineligible.
+        * ``"cvxpy-sequential"`` — require Parameterized MeanRisk reuse;
+          raise if ineligible.
         * ``"sklearn"`` — always call native skfolio.
 
     return_report : bool, default=False
@@ -1057,7 +1229,7 @@ def cross_val_predict(
     """
     _cap_native_threads()
     t_wall = time.perf_counter()
-    if backend not in {"auto", "compact", "sklearn"}:
+    if backend not in {"auto", "compact", "cvxpy-sequential", "sklearn"}:
         raise ValueError(f"Unknown backend {backend!r}")
 
     capabilities = classify_call(
@@ -1073,6 +1245,7 @@ def cross_val_predict(
     if backend == "sklearn" or (
         backend == "auto"
         and not capabilities.can_compact
+        and not capabilities.can_sequential
         and not capabilities.can_assemble
     ):
         pred = _skfolio_predict(
@@ -1093,6 +1266,7 @@ def cross_val_predict(
             backend="sklearn",
             fallback_reason=(
                 capabilities.compact_reason
+                or capabilities.sequential_reason
                 or capabilities.assemble_reason
                 or "backend=sklearn"
             ),
@@ -1103,6 +1277,11 @@ def cross_val_predict(
         raise ValueError(
             f"backend={backend!r} cannot compact this predict: "
             f"{capabilities.compact_reason}"
+        )
+    if backend == "cvxpy-sequential" and not capabilities.can_sequential:
+        raise ValueError(
+            f"backend={backend!r} cannot reuse this MeanRisk problem: "
+            f"{capabilities.sequential_reason}"
         )
 
     estimator = clone(estimator)
@@ -1141,7 +1320,7 @@ def cross_val_predict(
         )
         return (pred, report) if return_report else pred
 
-    if capabilities.can_compact:
+    if capabilities.can_compact and backend != "cvxpy-sequential":
         spec = estimator_spec(estimator)
         keep_returns = spec.needs_returns()
         # MRC paths have the same number of assets. Reuse one OSQP topology across
@@ -1226,6 +1405,82 @@ def cross_val_predict(
         )
         report = _report_from_batch(
             backend_name,
+            merged,
+            eval_s=time.perf_counter() - t_eval,
+            wall_s=time.perf_counter() - t_wall,
+        )
+        return (pred, report) if return_report else pred
+
+    if capabilities.can_sequential:
+        cache = SequentialProblemCache(estimator)
+        try:
+            merged = merge_batch_results(
+                [
+                    solve_sequential_folds(
+                        estimator,
+                        X,
+                        x_arr,
+                        y_arr,
+                        batch,
+                        cache=cache,
+                        path_id=path_index,
+                    )
+                    for path_index, batch in enumerate(cv_plan.path_batches())
+                ]
+            )
+        except Exception as error:
+            fail_reason = (
+                f"cvxpy-sequential solve failed: {type(error).__name__}: {error}"
+            )
+            if capabilities.can_assemble:
+                pred, merged, eval_s = _fit_assemble_prediction(
+                    estimator,
+                    X,
+                    x_arr,
+                    y_arr,
+                    cv_plan,
+                    portfolio_params,
+                )
+                report = _report_from_batch(
+                    "fit-assemble",
+                    merged,
+                    eval_s=eval_s,
+                    fallback_reason=fail_reason,
+                    wall_s=time.perf_counter() - t_wall,
+                )
+                return (pred, report) if return_report else pred
+            pred = _skfolio_predict(
+                estimator,
+                X,
+                y,
+                fallback_cv,
+                n_jobs=n_jobs,
+                method=method,
+                verbose=verbose,
+                params=params,
+                pre_dispatch=pre_dispatch,
+                column_indices=column_indices,
+                portfolio_params=portfolio_params,
+                entry_rebalancing_params=entry_rebalancing_params,
+            )
+            report = AccelerationReport(
+                backend="sklearn",
+                fallback_reason=fail_reason,
+                wall_s=time.perf_counter() - t_wall,
+            )
+            return (pred, report) if return_report else pred
+
+        t_eval = time.perf_counter()
+        pred = assemble_prediction(
+            X,
+            cv_plan,
+            merged.weights,
+            name=type(estimator).__name__,
+            portfolio_params=portfolio_params,
+            segment_params=_segment_params(estimator),
+        )
+        report = _report_from_batch(
+            "cvxpy-sequential",
             merged,
             eval_s=time.perf_counter() - t_eval,
             wall_s=time.perf_counter() - t_wall,

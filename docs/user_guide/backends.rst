@@ -11,21 +11,25 @@ Backends and reports
 Backend names
 *************
 
-=================  ============================================================
-``backend``        Meaning
-=================  ============================================================
-``osqp``           Compact mean-variance QP
-``clarabel``       Compact scenario LP / QP / SOCP / exponential cone
-``closed-form``    EqualWeighted, Random, or InverseVolatility weights
-``fit-assemble``   Native ``fit`` + assembly from ``weights_``
-``sklearn``        Unmodified skfolio ``cross_val_predict``
-``compact-grid``   Shared compact path inside :func:`grid_search`
-=================  ============================================================
+======================  ============================================================
+``backend``             Meaning
+======================  ============================================================
+``osqp``                Compact mean-variance QP
+``clarabel``            Compact scenario LP / QP / SOCP / exponential cone
+``cvxpy-sequential``    MeanRisk CVXPY graph reused via Parameters (full constraints)
+``closed-form``         EqualWeighted, Random, or InverseVolatility weights
+``fit-assemble``        Native ``fit`` + assembly from ``weights_``
+``sklearn``             Unmodified skfolio ``cross_val_predict``
+``compact-grid``        Shared compact path inside :func:`grid_search`
+``sequential-grid``     Parameterized MeanRisk grid inside :func:`grid_search`
+======================  ============================================================
 
 Force a policy with the keyword-only ``backend`` argument:
 
 * ``"auto"`` (default) — choose the best eligible path,
 * ``"compact"`` — require compact / closed-form; raise if ineligible,
+* ``"cvxpy-sequential"`` — require Parameterized MeanRisk reuse; raise if
+  ineligible,
 * ``"sklearn"`` — always call native skfolio.
 
 AccelerationReport
@@ -59,7 +63,16 @@ Inspect gates without running a backtest:
     assert caps.can_assemble
 
 Compact and assemble are independent. A MeanRisk configuration may be
-ineligible for the cone engines yet still eligible for serial fit-assemble.
+ineligible for the cone engines yet still eligible for Parameterized CVXPY
+reuse (``cvxpy-sequential``) or serial fit-assemble.
+
+``cvxpy-sequential`` keeps skfolio's own constraint and risk construction. Fold
+data (``mu``, returns, covariance square root, previous weights) is injected as
+``cp.Parameter`` objects so WalkForward windows with a fixed training length
+reuse one compiled problem. Topology changes (expanding ``TimeSeriesSplit``,
+a different number of assets) rebuild the graph. Custom ``add_constraints`` /
+``add_objective`` hooks stay on fit-assemble so a callable that closes over a
+particular window is not frozen into the first fold.
 
 .. danger::
 

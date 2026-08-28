@@ -98,7 +98,7 @@ def test_assume_centered_prior_is_not_compacted():
     _, report = cross_val_predict(
         estimator, X, cv=WalkForward(train_size=24, test_size=8), return_report=True
     )
-    assert report.backend == "fit-assemble"
+    assert report.backend == "cvxpy-sequential"
 
 
 def test_compiled_plan_is_immutable():

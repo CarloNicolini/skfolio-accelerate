@@ -11,6 +11,8 @@ repeated work that does not change the portfolio problem:
 
 * overlapping empirical moments are updated from sufficient statistics,
 * compact OSQP / Clarabel engines reuse a fixed cone topology across folds,
+* MeanRisk's own CVXPY graph is reused when extra constraints keep a fixed
+  shape,
 * closed-form estimators skip ``fit`` entirely,
 * other serial optimizers still call native ``fit``, then assemble test
   portfolios from ``weights_``.

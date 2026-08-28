@@ -71,11 +71,12 @@ use its minimum acceptable return, and drawdown keeps skfolio's ordered,
 non-compounded recurrence.
 
 Other serial estimators still call native `fit` so the original problem is
-unchanged, then assemble test portfolios from `weights_`. That includes HRP,
-risk budgeting, ratio objectives, risk limits, standard deviation, and similar
-cases. Pipelines, sequential previous weights (transaction costs, turnover, or
-a previous-weight fallback), `raise_on_failure=False`, parallel `n_jobs`, and
-`entry_rebalancing_params` still run through skfolio unchanged.
+unchanged, then assemble test portfolios from `weights_`. MeanRisk options
+outside that boxed subset (ratio objectives, risk limits, linear constraints,
+transaction costs, standard deviation, Gini, Ulcer, ...) reuse skfolio's own
+CVXPY problem across folds when the training shape is fixed. Pipelines,
+`raise_on_failure=False`, parallel `n_jobs`, and `entry_rebalancing_params`
+still run through skfolio unchanged.
 
 This boundary is intentional. Reusing mutable estimator or solver state without
 proving equivalence could silently solve a different investment problem.
@@ -89,12 +90,13 @@ prediction, report = cross_val_predict(
     cv=cv,
     return_report=True,
 )
-print(report.backend)  # "osqp", "clarabel", "closed-form", "fit-assemble", or "sklearn"
+print(report.backend)  # "osqp", "clarabel", "cvxpy-sequential", "closed-form", "fit-assemble", or "sklearn"
 ```
 
-`"sklearn"` means native skfolio was used. The report explains why. If a
-compact numerical solve cannot finish, the package retries with native `fit`
-and the assembled path rather than returning an accelerator-only failure.
+``"sklearn"`` means native skfolio was used. The report explains why. If a
+compact or sequential numerical solve cannot finish, the package retries with
+native ``fit`` and the assembled path rather than returning an
+accelerator-only failure.
 
 ## Checking a result
 
@@ -125,9 +127,12 @@ full ordering. It is `nan` when every score is the same.
 
 ## Parameter search
 
-`grid_search` is for a large grid that remains inside the fast MeanRisk subset.
-It scores candidates by mean out-of-sample Sharpe ratio and only constructs the
-winning prediction. Use skfolio or sklearn search for general estimators.
+`grid_search` evaluates a MeanRisk parameter grid with one shared CV plan.
+Compact-eligible candidates reuse OSQP / Clarabel. Other MeanRisk candidates
+(ratio objectives, risk limits, linear constraints, ...) reuse Parameterized
+CVXPY problems. Candidates are scored by mean out-of-sample Sharpe and only
+the winning prediction is constructed. Use skfolio or sklearn search for
+non-MeanRisk estimators.
 
 ```python
 import numpy as np

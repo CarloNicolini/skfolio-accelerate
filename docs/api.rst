@@ -62,8 +62,10 @@ Functions
     classify_call
     blocked_reason
     compact_blocked_reason
+    sequential_blocked_reason
     assemble_blocked_reason
     solve_compact_folds
+    solve_sequential_folds
     closed_form_weights
     fit_native_weights
     merge_batch_results
@@ -205,6 +207,36 @@ Functions
 
     estimator_spec
     make_compact_engine
+
+.. _mean_risk_problem_ref:
+
+:mod:`skfolio_accelerate.mean_risk_problem`: Sequential MeanRisk
+================================================================
+
+.. automodule:: skfolio_accelerate.mean_risk_problem
+    :no-members:
+    :no-inherited-members:
+
+.. currentmodule:: skfolio_accelerate.mean_risk_problem
+
+.. autosummary::
+    :nosignatures:
+    :toctree: generated/
+    :template: class.rst
+
+    ParametricMeanRisk
+    SequentialProblemCache
+    ProblemTopology
+    CompiledProblem
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    as_parametric
+    problem_topology
+    needs_observation_dimension
+    can_reuse_distribution
 
 .. _flagship_ref:
 

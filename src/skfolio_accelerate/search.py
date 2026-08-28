@@ -16,11 +16,17 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import ParameterGrid
 
-from skfolio_accelerate._arrays import as_float_2d
+from skfolio_accelerate._arrays import as_float_2d, as_float_array
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec, estimator_spec
 from skfolio_accelerate.cv_plan import compile_cv_plan
+from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import path_moment_session
-from skfolio_accelerate.predict import AccelerationReport, compact_blocked_reason
+from skfolio_accelerate.predict import (
+    AccelerationReport,
+    compact_blocked_reason,
+    sequential_blocked_reason,
+    solve_sequential_folds,
+)
 from skfolio_accelerate.scoring import (
     assemble_prediction,
     path_sharpes_from_weights,
@@ -64,35 +70,50 @@ class GridSearchResult:
     acceleration_report_: AccelerationReport
 
 
-def _candidate_specs(
+def _classify_grid(
     estimator, param_grid, *, y=None, cv=None
-) -> tuple[
-    list[dict[str, Any]],
-    list[MeanRiskSpec],
-]:
+) -> tuple[list[dict[str, Any]], list[MeanRiskSpec | None], str]:
     params = list(ParameterGrid(param_grid))
     if not params:
         raise ValueError("param_grid produced no candidates")
-    specs: list[MeanRiskSpec] = []
+    specs: list[MeanRiskSpec | None] = []
+    compact_ok = True
+    sequential_ok = True
+    first_failure: tuple[dict[str, Any], str] | None = None
     for candidate_params in params:
         candidate = clone(estimator).set_params(**candidate_params)
-        reason = compact_blocked_reason(candidate, y=y, cv=cv)
-        if reason is not None:
-            raise ValueError(
-                "grid_search only supports compact MeanRisk candidates; "
-                f"{candidate_params!r} is unsupported: {reason}"
-            )
-        specs.append(estimator_spec(candidate))
-    return params, specs
+        compact_reason = compact_blocked_reason(candidate, y=y, cv=cv)
+        sequential_reason = sequential_blocked_reason(candidate, cv=cv)
+        if compact_reason is None:
+            specs.append(estimator_spec(candidate))
+        else:
+            compact_ok = False
+            specs.append(None)
+        if sequential_reason is not None:
+            sequential_ok = False
+            if first_failure is None:
+                first_failure = (candidate_params, sequential_reason)
+    if compact_ok:
+        return params, specs, "compact"
+    if sequential_ok:
+        return params, specs, "sequential"
+    if first_failure is None:
+        raise ValueError("grid_search produced no supported MeanRisk candidates")
+    failed_params, reason = first_failure
+    raise ValueError(
+        "grid_search only supports compact or sequential MeanRisk candidates; "
+        f"{failed_params!r} is unsupported: {reason}"
+    )
 
 
 def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResult:
-    """Select compact MeanRisk parameters with one shared CV/moment pass.
+    """Select MeanRisk parameters with one shared CV plan.
 
-    All candidates must be eligible for the compact engine. Scores are mean
-    out-of-sample path Sharpe ratios computed from fold weights without
-    constructing intermediate Portfolio objects. Only the winning parameter set
-    is materialized.
+    Compact-eligible grids reuse OSQP / Clarabel engines and empirical moments.
+    Other MeanRisk grids (ratio objectives, risk limits, linear constraints,
+    ...) reuse Parameterized CVXPY problems. Scores are mean out-of-sample
+    path Sharpe ratios computed from fold weights. Only the winning parameter
+    set is materialized.
 
     Parameters
     ----------
@@ -122,38 +143,34 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     Raises
     ------
     ValueError
-        If the grid is empty or any candidate is outside the compact MeanRisk
-        subset.
+        If the grid is empty or any candidate is outside compact and sequential
+        MeanRisk support.
 
     Notes
     -----
-    For general estimators (pipelines, HRP, ratio objectives, ...), use
-    skfolio's ``OnlineGridSearch`` or sklearn's ``GridSearchCV``.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from skfolio.optimization import MeanRisk
-    >>> from skfolio_accelerate import grid_search
-    >>> result = grid_search(
-    ...     MeanRisk(),
-    ...     X,
-    ...     {"l2_coef": np.logspace(-5, -1, 8)},
-    ...     cv=cv,
-    ... )  # doctest: +SKIP
-    >>> result.best_params_  # doctest: +SKIP
-
-    See Also
-    --------
-    cross_val_predict : Single-estimator amortized prediction.
-    GridSearchResult : Structured search output.
+    For general estimators (pipelines, HRP, ...), use skfolio's
+    ``OnlineGridSearch`` or sklearn's ``GridSearchCV``.
     """
     started = time.perf_counter()
-    params, specs = _candidate_specs(estimator, param_grid, y=y, cv=cv)
+    params, specs, kind = _classify_grid(estimator, param_grid, y=y, cv=cv)
 
     x_arr = as_float_2d(X)
     cv_plan = compile_cv_plan(cv, X, y)
-    keep_returns = any(spec.needs_returns() for spec in specs)
+
+    if kind == "sequential":
+        return _sequential_grid_search(
+            estimator,
+            X,
+            x_arr,
+            y,
+            params,
+            cv_plan,
+            started,
+        )
+
+    compact_specs = [spec for spec in specs if spec is not None]
+    keep_returns = any(spec.needs_returns() for spec in compact_specs)
+    specs = compact_specs
 
     weights: list[dict[int, np.ndarray]] = [dict() for _ in specs]
     engines = [EngineCache(spec=spec) for spec in specs]
@@ -226,6 +243,85 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
         n_prior_updates=n_prior_updates,
         n_warm_starts=n_warm_starts,
         moments_s=moments_s,
+        solve_s=solve_s,
+        eval_s=eval_s,
+        wall_s=time.perf_counter() - started,
+    )
+    return GridSearchResult(
+        best_params_=params[best_index],
+        best_score_=float(mean_scores[best_index]),
+        best_index_=best_index,
+        best_prediction_=best_prediction,
+        cv_results_={
+            "params": params,
+            "mean_test_score": mean_scores,
+            "path_scores": path_scores,
+        },
+        acceleration_report_=report,
+    )
+
+
+def _sequential_grid_search(
+    estimator,
+    X,
+    x_arr,
+    y,
+    params: list[dict[str, Any]],
+    cv_plan,
+    started: float,
+) -> GridSearchResult:
+    y_arr = None if y is None else as_float_array(y)
+    weights: list[dict[int, np.ndarray]] = [dict() for _ in params]
+    caches = [
+        SequentialProblemCache(clone(estimator).set_params(**candidate_params))
+        for candidate_params in params
+    ]
+    solve_s = 0.0
+    n_warm_starts = 0
+    n_rebuilds = 0
+    is_dpp: bool | None = None
+    for path_index, folds in enumerate(cv_plan.path_batches()):
+        for candidate_id, cache in enumerate(caches):
+            result = solve_sequential_folds(
+                estimator,
+                X,
+                x_arr,
+                y_arr,
+                folds,
+                cache=cache,
+                path_id=path_index,
+            )
+            weights[candidate_id].update(result.weights)
+            solve_s += result.solve_s
+            n_warm_starts += result.n_warm_starts
+            n_rebuilds += result.n_rebuilds
+            if result.is_dpp is not None:
+                is_dpp = (
+                    result.is_dpp if is_dpp is None else bool(is_dpp and result.is_dpp)
+                )
+
+    t_eval = time.perf_counter()
+    path_scores = np.vstack(
+        [
+            path_sharpes_from_weights(X, cv_plan, candidate_weights)
+            for candidate_weights in weights
+        ]
+    )
+    mean_scores = np.mean(path_scores, axis=1)
+    best_index = int(np.nanargmax(mean_scores))
+    best_prediction = assemble_prediction(
+        X,
+        cv_plan,
+        weights[best_index],
+        name=type(estimator).__name__,
+    )
+    eval_s = time.perf_counter() - t_eval
+    report = AccelerationReport(
+        backend="sequential-grid",
+        n_solves=len(cv_plan.folds) * len(params),
+        n_warm_starts=n_warm_starts,
+        n_rebuilds=n_rebuilds,
+        is_dpp=is_dpp,
         solve_s=solve_s,
         eval_s=eval_s,
         wall_s=time.perf_counter() - started,

@@ -91,6 +91,9 @@ def test_estimators_and_mean_risk_options_match_skfolio(estimator):
     _assert_same_paths(pred, ref)
     if blocked_reason(estimator) is None:
         assert report.backend in {"osqp", "clarabel", "closed-form"}
+    elif isinstance(estimator, MeanRisk):
+        assert report.backend == "cvxpy-sequential"
+        assert report.n_rebuilds >= 1
     elif getattr(estimator, "needs_previous_weights", False):
         assert report.backend == "sklearn"
     else:
@@ -242,7 +245,10 @@ def test_fallback_estimators_assemble_from_native_fit():
             estimator, X, cv=cv, n_jobs=1, return_report=True
         )
         _assert_same_paths(pred, ref)
-        assert report.backend == "fit-assemble"
+        expected = (
+            "cvxpy-sequential" if isinstance(estimator, MeanRisk) else "fit-assemble"
+        )
+        assert report.backend == expected
         assert report.n_solves == cv.get_n_splits(X)
 
 
@@ -268,8 +274,8 @@ def test_transaction_costs_stay_on_sequential_native_path():
     ref = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
     pred, report = cross_val_predict(estimator, X, cv=cv, n_jobs=1, return_report=True)
     _assert_same_paths(pred, ref)
-    assert report.backend == "sklearn"
-    assert "previous_weights" in (report.fallback_reason or "")
+    assert report.backend == "cvxpy-sequential"
+    assert "previous_weights" not in (report.fallback_reason or "")
 
 
 def test_shuffled_kfold_is_rejected_like_skfolio():

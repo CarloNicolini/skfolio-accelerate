@@ -110,8 +110,9 @@ def test_all_risk_measures_match_native_across_cv(risk_measure, cv_factory):
         if report.backend in {"sklearn", "fit-assemble"}:
             assert report.fallback_reason is not None
     else:
-        assert report.backend == "fit-assemble"
-        assert report.fallback_reason == "risk_measure is not compacted"
+        assert report.backend in {"cvxpy-sequential", "fit-assemble"}
+        if report.backend == "fit-assemble":
+            assert report.fallback_reason is not None
 
 
 @pytest.mark.parametrize(

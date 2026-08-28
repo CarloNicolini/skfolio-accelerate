@@ -9,6 +9,7 @@ executed by one of several backends:
 
 * compact OSQP / Clarabel engines for a subset of
   :class:`~skfolio.optimization.MeanRisk`,
+* Parameterized CVXPY reuse for other MeanRisk configurations,
 * closed-form weights for default
   :class:`~skfolio.optimization.EqualWeighted`,
   :class:`~skfolio.optimization.Random`, and
