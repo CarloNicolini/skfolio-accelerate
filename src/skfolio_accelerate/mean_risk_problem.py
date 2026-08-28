@@ -189,6 +189,8 @@ class ParametricMeanRisk(MeanRisk):
             state.returns.value = np.ascontiguousarray(
                 return_distribution.returns, dtype=float
             )
+        if not state.sqrt:
+            return
         cov_sqrt = return_distribution.covariance_sqrt
         for param, component in zip(state.sqrt, cov_sqrt.components, strict=True):
             param.value = np.ascontiguousarray(component, dtype=float)

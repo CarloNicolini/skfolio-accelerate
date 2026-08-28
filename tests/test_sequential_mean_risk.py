@@ -45,6 +45,7 @@ def test_parametric_disjoint_windows_match_native(kwargs):
     assert id(adapter.last_problem) == first_id
     assert adapter.n_warm_starts >= 1
     np.testing.assert_allclose(adapter.weights_, reference.weights_, rtol=0, atol=5e-5)
+    assert adapter.n_rebuilds == 1
 
 
 def test_auto_picks_osqp_for_boxed_variance():
@@ -86,6 +87,17 @@ def test_linear_constraints_on_named_assets():
         path_sharpes(observed), path_sharpes(reference), rtol=3e-3, atol=2e-4
     )
     assert report.backend == "cvxpy-sequential"
+
+
+def test_fixed_window_cvar_reuses_one_problem():
+    X = synthetic_returns(84, 5, seed=8)
+    estimator = MeanRisk(risk_measure=RiskMeasure.CVAR, min_return=1e-6, l2_coef=1e-5)
+    _, report = cross_val_predict(
+        estimator, X, cv=_walk_forward(), n_jobs=1, return_report=True
+    )
+    assert report.backend == "cvxpy-sequential"
+    assert report.n_rebuilds == 1
+    assert report.n_warm_starts >= 1
 
 
 def test_expanding_window_rebuilds_when_T_changes():
