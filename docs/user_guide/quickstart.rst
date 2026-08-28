@@ -57,7 +57,8 @@ What is accelerated
 ``ObjectiveFunction`` × ``RiskMeasure`` pair, including WalkForward,
 MultipleRandomizedCV, and CombinatorialPurgedCV:
 
-* boxed variance uses compact OSQP; boxed scenario risks use compact Clarabel;
+* boxed variance uses compact OSQP; boxed scenario LPs use persistent HiGHS;
+  remaining boxed scenario cones use compact Clarabel;
 * other MeanRisk configurations (standard deviation, Ulcer,
   ``MAXIMIZE_RETURN``, risk limits, linear constraints, fees, L1, …) reuse
   skfolio's CVXPY problem when the training shape is fixed;

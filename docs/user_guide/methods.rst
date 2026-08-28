@@ -12,9 +12,9 @@ Methods, mathematics, and assumptions
    Formulations and eligibility gates may change between releases. Treat every
    accelerated result as provisional until you have compared it to native
    skfolio on the same workload. Prefer the native path whenever the problem
-   falls outside the documented eligibility rules. Compact OSQP / Clarabel
-   mathematics is on this page; Parameterized MeanRisk reuse is described in
-   :ref:`backends`.
+   falls outside the documented eligibility rules. Compact OSQP / HiGHS /
+   Clarabel mathematics is on this page; Parameterized MeanRisk reuse is
+   described in :ref:`backends`.
 
 This page explains *why* the library is faster, *what* mathematics it reuses,
 and *which* assumptions that reuse relies on. It does not change the investment
@@ -41,8 +41,9 @@ identical, or nearly identical, across folds:
   ``splitter.split`` exactly once and stores immutable fold indices.
 * Sufficient statistics ``(n, s, G)`` update overlapping moments with exact
   rank-k add/drop operations.
-* Compact OSQP / Clarabel engines keep a fixed cone topology and warm-start
-  across folds while ``(n_assets, T)`` stay constant.
+* Compact OSQP / HiGHS / Clarabel engines keep a fixed topology and warm-start
+  across folds while ``(n_assets, T)`` stay constant. HiGHS additionally
+  restores the previous simplex basis after incremental scenario updates.
 * Test portfolios are assembled from ``weights_``, skipping native
   ``predict()`` construction on the serial path.
 
@@ -149,11 +150,32 @@ where ``scale = 1`` or ``risk_aversion`` respectively. The constraint matrix
 triangle of ``P`` and the linear term ``q`` are updated each fold, and the
 previous primal/dual iterate is warm-started when allowed.
 
-Compact scenario risks (Clarabel)
+Compact scenario LPs (HiGHS)
 *********************************
 
-Semi-variance, MAD, CVaR, drawdown measures, and the other supported scenario
-risks keep skfolio's LP / QP / SOCP / exponential-cone formulations:
+MAD, first lower partial moment, CVaR, and worst realization are linear
+programs when ``l2_coef = 0``. Baking ``R − μ`` into every scenario coefficient
+makes adjacent WalkForward folds look unrelated: a previous simplex basis then
+needs as many pivots as a cold start, or more.
+
+The compact HiGHS engine keeps an auxiliary portfolio-mean variable (MAD /
+FLPM) or stores raw ``r_t`` (CVaR / worst realization). Overlapping
+observations keep the same constraint rows and slack variables. A rolling step
+of ``s`` overwrites ``s`` scenario rows plus the mean equality, restores the
+previous optimal basis, and reoptimizes. Later folds therefore do
+``T_{\mathrm{fold}}^{(k+1)} \ll T_{\mathrm{fold}}^{(1)}`` in simplex
+iterations. Non-overlapping splitters still reuse the compiled sparsity
+pattern.
+
+A diagonal ``l2_coef`` term makes the same measures QPs; those stay on
+Clarabel.
+
+Compact scenario cones (Clarabel)
+*********************************
+
+Semi-variance, drawdown measures, exponential-cone risks, and LP measures with
+a quadratic ``l2_coef`` keep skfolio's QP / SOCP / exponential-cone
+formulations:
 
 * downside measures use skfolio's minimum acceptable return (asset mean when
   unset);

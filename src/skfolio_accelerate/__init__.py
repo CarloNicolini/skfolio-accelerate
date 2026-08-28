@@ -7,7 +7,7 @@ replacement for :func:`skfolio.model_selection.cross_val_predict`.
 A call is compiled once into a :class:`~skfolio_accelerate.cv_plan.CVPlan`, then
 executed by one of several backends:
 
-* compact OSQP / Clarabel engines for a subset of
+* compact OSQP / HiGHS / Clarabel engines for a subset of
   :class:`~skfolio.optimization.MeanRisk`,
 * Parameterized reuse of skfolio's MeanRisk CVXPY problem when extra
   constraints keep a fixed training shape,

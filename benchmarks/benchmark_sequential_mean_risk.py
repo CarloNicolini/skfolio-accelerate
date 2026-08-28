@@ -254,7 +254,7 @@ def main() -> None:
                 }
             )
             compact_retry = (
-                expected in {"osqp", "clarabel"}
+                expected in {"osqp", "highs", "clarabel"}
                 and report.backend in {"fit-assemble", "sklearn"}
                 and report.fallback_reason
             )

@@ -20,6 +20,7 @@ classifiers = [
 ]
 dependencies = [
   "osqp>=1.0,<2",
+  "highspy>=1.8",
   "skfolio>=1.0,<2",
 ]
 

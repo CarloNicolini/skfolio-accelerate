@@ -3,6 +3,11 @@
 These engines reproduce skfolio's boxed MeanRisk problem for the compact
 subset, bypassing CVXPY. They are not a general cone-solver layer.
 
+Pure scenario LPs (MAD, FLPM, CVaR, worst realization, ``l2_coef=0``) use a
+persistent HiGHS simplex basis. Overlapping WalkForward windows keep scenario
+rows attached to the same auxiliary variables so later folds reoptimize from
+the previous basis. Variance stays OSQP; remaining scenario cones stay Clarabel.
+
 Equivalence with skfolio (see ``ConvexOptimization`` in skfolio 1.0):
 
 * Variance is ``wᵀ Σ w`` plus ``l2_coef ‖w‖²``. skfolio implements variance as
@@ -952,6 +957,10 @@ def make_compact_engine(
         raise ValueError(f"Unsupported risk_measure {risk}")
     if n_observations is None:
         raise ValueError(f"{risk.name} engine requires n_observations")
+    from skfolio_accelerate.linear_lp import LinearHighs, is_highs_lp_risk
+
+    if is_highs_lp_risk(spec):
+        return LinearHighs(spec, n_assets, n_observations)
     if risk is RiskMeasure.CVAR:
         return CVaRClarabel(spec, n_assets, n_observations)
     return ScenarioClarabel(spec, n_assets, n_observations)
