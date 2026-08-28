@@ -6,6 +6,13 @@ Backends and reports
 
 .. currentmodule:: skfolio_accelerate
 
+.. warning::
+
+   **Experimental.** Backend selection and fallback behaviour may evolve.
+   Inspect :class:`AccelerationReport` and compare against native skfolio
+   before trusting a new configuration. Mathematical assumptions are listed
+   in :ref:`methods`.
+
 :func:`cross_val_predict` classifies each call once, then selects a backend.
 
 Backend names

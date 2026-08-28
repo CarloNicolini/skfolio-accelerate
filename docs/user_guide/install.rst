@@ -2,6 +2,12 @@
 Installation
 ************
 
+.. warning::
+
+   **Experimental library.** APIs and numerical paths may change between
+   releases. Pin a version and re-check results against native skfolio after
+   upgrades.
+
 Install using pip
 *****************
 
