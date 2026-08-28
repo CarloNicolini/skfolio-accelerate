@@ -133,8 +133,8 @@ def main() -> None:
         f"{'native_s':>9} {'auto_s':>9} {'auto_x':>7} {'auto':<16} "
         f"{'warm':>5} {'rebuild':>7}"
     )
-    for objective in objectives:
-        for risk in risks:
+    for risk in risks:
+        for objective in objectives:
             estimator = MeanRisk(
                 objective_function=objective,
                 risk_measure=risk,
