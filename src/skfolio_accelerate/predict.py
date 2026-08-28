@@ -6,10 +6,11 @@
     → backend (compact / sequential CVXPY / closed-form / fit-assemble / native)
     → fold weights → assembled Portfolio objects
 
-Compact OSQP, HiGHS, and Clarabel kernels accelerate a subset of MeanRisk. EqualWeighted,
-Random, and default InverseVolatility use closed-form weights. Remaining
-serial estimators still call native ``fit``, then assemble test portfolios
-from ``weights_`` so they skip joblib, train/test copies, and ``predict()``.
+Compact OSQP, HiGHS, and Clarabel kernels accelerate a subset of MeanRisk.
+EqualWeighted, Random, and default InverseVolatility use closed-form weights.
+Remaining serial estimators still call native ``fit``, then assemble test
+portfolios from ``weights_`` so they skip joblib, train/test copies, and
+``predict()``.
 
 The accelerator never reinterprets an unsupported estimator as a nearby
 compact problem. Capability checks are the only gate; numerical engines assume

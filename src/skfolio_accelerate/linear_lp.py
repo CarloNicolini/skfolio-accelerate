@@ -86,7 +86,9 @@ def continuation_unhelpful_reason(estimator, cv) -> str | None:
     )
 
 
-def rolling_shift(previous: NDArray[np.float64], current: NDArray[np.float64]) -> int | None:
+def rolling_shift(
+    previous: NDArray[np.float64], current: NDArray[np.float64]
+) -> int | None:
     """Return ``s`` if ``current`` is ``previous`` advanced by ``s`` rows."""
     if previous.shape != current.shape or previous.size == 0:
         return None
@@ -267,7 +269,9 @@ class LinearHighs:
         self._a_index = np.asarray(indices, dtype=np.int32)
         self._a_value = np.asarray(values, dtype=np.float64)
 
-    def _write_slots(self, slot_indices: NDArray[np.int32], rows: NDArray[np.float64]) -> None:
+    def _write_slots(
+        self, slot_indices: NDArray[np.int32], rows: NDArray[np.float64]
+    ) -> None:
         n = self.n_assets
         for j in range(n):
             self._a_value[self._r_nz[j, slot_indices]] = rows[:, j]
@@ -355,10 +359,13 @@ class LinearHighs:
         model_status = self.solver.getModelStatus()
         if model_status != HighsModelStatus.kOptimal:
             raise RuntimeError(
-                f"HiGHS {self.spec.risk_measure.name} failed: {model_status} ({run_status})"
+                f"HiGHS {self.spec.risk_measure.name} failed: "
+                f"{model_status} ({run_status})"
             )
         self._basis = self.solver.getBasis()
         self._returns = returns
         self._built = True
-        x = np.asarray(self.solver.getSolution().col_value[: self.n_assets], dtype=np.float64)
+        x = np.asarray(
+            self.solver.getSolution().col_value[: self.n_assets], dtype=np.float64
+        )
         return x.copy()

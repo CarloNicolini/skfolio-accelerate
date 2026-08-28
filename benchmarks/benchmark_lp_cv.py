@@ -147,9 +147,7 @@ def main() -> None:
                 )
                 continue
             if native_sharpes.shape != auto_sharpes.shape:
-                status = (
-                    f"sharpe shape {native_sharpes.shape} != {auto_sharpes.shape}"
-                )
+                status = f"sharpe shape {native_sharpes.shape} != {auto_sharpes.shape}"
                 print(f"{cv_name:<22} {risk.name:<32} ERROR {status}", flush=True)
                 rows.append(
                     {
