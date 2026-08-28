@@ -201,7 +201,7 @@ def test_auto_picks_osqp_for_boxed_variance_and_explains_why():
 
 
 def test_auto_picks_sequential_for_ratio_and_explains_why():
-    X = synthetic_returns(72, 5, seed=10)
+    X = synthetic_returns(84, 5, seed=4)
     estimator = MeanRisk(
         objective_function=ObjectiveFunction.MAXIMIZE_RATIO,
         l2_coef=1e-5,
