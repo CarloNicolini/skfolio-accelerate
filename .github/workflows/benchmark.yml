@@ -1,0 +1,44 @@
+name: Relative benchmark
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: relative-bench-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  relative:
+    name: In-run main vs PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev,benchmark]"
+      - name: Fetch base branch
+        run: git fetch origin "${{ github.base_ref || 'main' }}" --depth 1
+      - name: Run in-run relative benchmark
+        run: >
+          python benchmark/run_relative.py
+          --base "origin/${{ github.base_ref || 'main' }}"
+          --quick --workers 1 --no-figures
+      - name: Upload relative results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: relative-benchmark-${{ github.sha }}
+          path: benchmark/results/relative/
+          if-no-files-found: warn
+          retention-days: 14

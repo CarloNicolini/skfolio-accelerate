@@ -146,6 +146,26 @@ def relative_sharpe_error(native_sharpe: float, accelerated_sharpe: float) -> fl
     return float((accelerated_sharpe - native_sharpe) / abs(native_sharpe))
 
 
+def relative_delta_pct(base_time: float, head_time: float) -> float:
+    """Percentage change: ``100 * (head_time - base_time) / base_time``.
+
+    Positive values mean the head commit is slower. Undefined when ``base_time``
+    is missing, non-finite, or zero.
+    """
+    if not math.isfinite(base_time) or not math.isfinite(head_time) or base_time == 0.0:
+        return float("nan")
+    return float(100.0 * (head_time - base_time) / base_time)
+
+
+def _as_float(value: Any) -> float:
+    if value is None or value == "":
+        return float("nan")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float("nan")
+
+
 def attach_native_comparisons(
     row: dict[str, Any], native: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -153,16 +173,17 @@ def attach_native_comparisons(
     updated = dict(row)
     if native is None or row.get("method") == "native":
         if row.get("method") == "native":
-            updated["delta_time_s"] = 0.0
-            updated["relative_time"] = 1.0
-            updated["speedup"] = 1.0
-            updated["delta_sharpe"] = 0.0
-            updated["relative_sharpe_error"] = 0.0
+            ok = str(row.get("status")) == "ok"
+            updated["delta_time_s"] = 0.0 if ok else float("nan")
+            updated["relative_time"] = 1.0 if ok else float("nan")
+            updated["speedup"] = 1.0 if ok else float("nan")
+            updated["delta_sharpe"] = 0.0 if ok else float("nan")
+            updated["relative_sharpe_error"] = 0.0 if ok else float("nan")
         return updated
-    native_t = float(native.get("time_s", float("nan")))
-    acc_t = float(row.get("time_s", float("nan")))
-    native_s = float(native.get("mean_sharpe", float("nan")))
-    acc_s = float(row.get("mean_sharpe", float("nan")))
+    native_t = _as_float(native.get("time_s", float("nan")))
+    acc_t = _as_float(row.get("time_s", float("nan")))
+    native_s = _as_float(native.get("mean_sharpe", float("nan")))
+    acc_s = _as_float(row.get("mean_sharpe", float("nan")))
     updated["delta_time_s"] = delta_time(native_t, acc_t)
     updated["relative_time"] = relative_time(native_t, acc_t)
     updated["speedup"] = speedup(native_t, acc_t)

@@ -25,12 +25,15 @@ from benchmark.metrics import (
     delta_sharpe,
     delta_time,
     parse_raw_times,
+    relative_delta_pct,
     relative_sharpe_error,
     relative_time,
     speedup,
     timing_summary,
 )
 from benchmark.protocol import fold_index_fingerprint, make_cv
+from benchmark.relative import compare_in_run_rows
+from benchmark.run_benchmark import parse_args
 
 
 def test_synthetic_data_is_deterministic():
@@ -146,6 +149,25 @@ def test_timing_and_sharpe_comparisons():
     assert compared["relative_time"] == 0.25
     assert compared["delta_sharpe"] == pytest.approx(0.05)
     assert compared["relative_sharpe_error"] == pytest.approx(0.05)
+    failed_native = {
+        "method": "native",
+        "time_s": None,
+        "mean_sharpe": None,
+        "status": "SolverError",
+    }
+    failed_acc = {
+        "method": "accelerated",
+        "time_s": None,
+        "mean_sharpe": None,
+        "status": "SolverError",
+    }
+    compared_fail = attach_native_comparisons(failed_acc, failed_native)
+    assert math.isnan(compared_fail["speedup"])
+    native_fail = attach_native_comparisons(failed_native, failed_native)
+    assert math.isnan(native_fail["speedup"])
+    assert relative_delta_pct(10.0, 12.0) == pytest.approx(20.0)
+    assert relative_delta_pct(10.0, 8.0) == pytest.approx(-20.0)
+    assert math.isnan(relative_delta_pct(0.0, 1.0))
 
 
 def test_parse_raw_times_formats():
@@ -221,3 +243,50 @@ def test_json_writer_roundtrip(tmp_path: Path):
     write_json(path, {"schema_version": SCHEMA_VERSION, "rows": []})
     payload = json.loads(path.read_text())
     assert payload["schema_version"] == SCHEMA_VERSION
+
+
+def test_output_dir_flag():
+    args = parse_args(["--output-dir", "/tmp/bench-out", "--quick"])
+    assert args.output_dir == Path("/tmp/bench-out")
+    assert args.quick is True
+
+
+def test_in_run_relative_delta_rows():
+    base = [
+        {
+            "dataset": "synthetic",
+            "cv": "walk-forward",
+            "estimator": "MINIMIZE_RISK/VARIANCE",
+            "method": "accelerated",
+            "time_s": 2.0,
+            "speedup": 4.0,
+            "mean_sharpe": 0.1,
+            "status": "ok",
+        }
+    ]
+    head = [
+        {
+            "dataset": "synthetic",
+            "cv": "walk-forward",
+            "estimator": "MINIMIZE_RISK/VARIANCE",
+            "method": "accelerated",
+            "time_s": 2.5,
+            "speedup": 3.2,
+            "mean_sharpe": 0.1,
+            "status": "ok",
+        }
+    ]
+    rows = compare_in_run_rows(base, head)
+    assert len(rows) == 1
+    assert rows[0]["delta_pct"] == pytest.approx(25.0)
+    assert rows[0]["delta_time_s"] == pytest.approx(0.5)
+
+
+def test_agents_md_requires_in_run_relative_benchmark():
+    text = Path(__file__).resolve().parents[1].joinpath("AGENTS.md").read_text()
+    assert "python benchmark/run_relative.py" in text
+    assert "python benchmark/run_benchmark.py" in text
+    assert "100 * (head_time - base_time) / base_time" in text
+    assert "native_time / accelerated_time" in text
+    assert "benchmarks/benchmark_" in text
+    assert "baseline.json" not in text

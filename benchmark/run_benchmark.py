@@ -9,6 +9,7 @@ Examples
 --------
 ::
 
+    python benchmark/run_relative.py --base origin/main --quick --workers 1
     python benchmark/run_benchmark.py
     python benchmark/run_benchmark.py --dataset synthetic
     python benchmark/run_benchmark.py --dataset sp500
@@ -94,6 +95,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-lp-l2-zero", action="store_true")
     parser.add_argument("--no-figures", action="store_true")
     parser.add_argument("--n-jobs", type=int, default=None)
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=None,
+        help="write this run into DIR instead of a dated results folder",
+    )
     return parser.parse_args(argv)
 
 
@@ -233,17 +240,24 @@ def main(argv: list[str] | None = None) -> int:
                     row.update(_flatten_cell(cell))
                     rows.append(row)
                     time_s = cell.get("time_s")
-                    speed = ""
+                    try:
+                        time_txt = f"{float(time_s):.4f}s"
+                    except (TypeError, ValueError):
+                        time_txt = "nan"
                     print(
                         f"{dataset.name:<10} {cv_kind:<22} {spec.name:<44} "
                         f"{method:<12} {cell.get('status')} "
-                        f"{time_s if time_s is not None else float('nan'):.4f}s "
-                        f"{cell.get('backend') or ''} {speed}",
+                        f"{time_txt} "
+                        f"{cell.get('backend') or ''}",
                         flush=True,
                     )
 
     rows = apply_comparisons(rows)
-    out_dir = run_directory(RESULTS_ROOT, git.get("git_sha_short"))
+    if args.output_dir is not None:
+        out_dir = args.output_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir = run_directory(RESULTS_ROOT, git.get("git_sha_short"))
     write_csv(out_dir / "results.csv", rows)
     write_json(
         out_dir / "results.json",
@@ -264,9 +278,10 @@ def main(argv: list[str] | None = None) -> int:
             figure_paths = generate_all_figures(
                 rows, output_dir=out_dir / "figures", results_root=RESULTS_ROOT
             )
-            FIGURES_ROOT.mkdir(parents=True, exist_ok=True)
-            for path in figure_paths:
-                shutil.copy(path, FIGURES_ROOT / path.name)
+            if args.output_dir is None:
+                FIGURES_ROOT.mkdir(parents=True, exist_ok=True)
+                for path in figure_paths:
+                    shutil.copy(path, FIGURES_ROOT / path.name)
         except ImportError as error:
             print(f"Skipping figures (install plotly): {error}", flush=True)
 
