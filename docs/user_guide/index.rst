@@ -36,5 +36,6 @@ eligibility rules and the mathematics behind the speedups, then the
     Methods, mathematics, and assumptions <methods>
     Backends and reports <backends>
     Moments and CV plans <moments_and_plans>
+    Persistent COSMO.rs <cosmo>
     Hyperparameter search <grid_search>
     Ranking checks <ranking>

@@ -44,6 +44,7 @@ Backend names
 ``osqp``                Compact mean-variance QP
 ``highs``               Compact scenario LP with persistent HiGHS simplex
 ``clarabel``            Compact scenario QP / SOCP / exponential cone
+``cosmo``               Optional persistent COSMO.rs ADMM (not auto)
 ``cvxpy-sequential``    Reuse skfolio's MeanRisk CVXPY problem across folds
 ``closed-form``         EqualWeighted, Random, or InverseVolatility weights
 ``fit-assemble``        Native ``fit`` + assembly from ``weights_``
@@ -55,6 +56,7 @@ Force a policy with the keyword-only ``backend`` argument:
 
 * ``"auto"`` (default) — the order above,
 * ``"compact"`` — require compact / closed-form; raise if ineligible,
+* ``"cosmo"`` — require compact MeanRisk and the COSMO.rs engine,
 * ``"sklearn"`` — always call native skfolio.
 
 AccelerationReport

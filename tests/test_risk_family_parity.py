@@ -110,6 +110,7 @@ def test_all_risk_measures_match_native_across_cv(risk_measure, cv_factory):
             "osqp",
             "highs",
             "clarabel",
+            "cosmo",
             "fit-assemble",
             "sklearn",
         }
