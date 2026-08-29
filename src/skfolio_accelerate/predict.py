@@ -26,12 +26,12 @@ import warnings
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predict
 from skfolio.population import Population
 from skfolio.portfolio import MultiPeriodPortfolio
 from sklearn.base import clone
 
-from skfolio_accelerate._arrays import as_float_2d, as_float_array
 from skfolio_accelerate._capabilities import (
     _CLOSED_FORM_TYPES,
     BackendName,
@@ -535,8 +535,8 @@ def cross_val_predict(
         )
 
     estimator = clone(estimator)
-    x_arr = as_float_2d(X)
-    y_arr = None if y is None else as_float_array(y)
+    x_arr = np.ascontiguousarray(X, dtype=np.float64)
+    y_arr = None if y is None else np.ascontiguousarray(y, dtype=np.float64)
     # A compact numerical failure must retry the exact original split plan.
     # Some splitters accept mutable RandomState objects and advance them in split().
     fallback_cv = copy.deepcopy(cv)

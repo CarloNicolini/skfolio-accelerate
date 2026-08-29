@@ -19,8 +19,8 @@ from scipy.stats import rankdata
 from skfolio.population import Population
 from skfolio.portfolio import MultiPeriodPortfolio, Portfolio
 
-from skfolio_accelerate._arrays import as_float_array, contiguous_row_slice
 from skfolio_accelerate.cv_plan import CVPlan
+from skfolio_accelerate.moments import _contiguous_row_slice
 
 
 def path_sharpes(prediction) -> np.ndarray:
@@ -231,7 +231,7 @@ def path_sharpes_from_weights(
     Intended for :func:`~skfolio_accelerate.search.grid_search`, where only the
     winning parameter set is materialized into Portfolio objects.
     """
-    matrix = as_float_array(X)
+    matrix = np.ascontiguousarray(X, dtype=np.float64)
     path_returns: list[list[NDArray[np.float64]]] = [[] for _ in range(cv_plan.n_paths)]
     for fold in cv_plan.folds:
         weights = weights_by_fold[fold.fold_id]
@@ -240,7 +240,7 @@ def path_sharpes_from_weights(
         else:
             segments = ((fold.test_idx, fold.path_id),)
         for rows, path_id in segments:
-            row_selector = contiguous_row_slice(rows)
+            row_selector = _contiguous_row_slice(rows)
             if row_selector is None:
                 row_selector = rows
             if fold.asset_idx is None:
@@ -282,7 +282,7 @@ def window_view(
         CPCV blocks become a slice view instead of an advanced-index copy.
     """
     rows = np.asarray(rows, dtype=np.intp)
-    row_selector = contiguous_row_slice(rows)
+    row_selector = _contiguous_row_slice(rows)
     if row_selector is None:
         row_selector = rows
     if cols is None:
@@ -319,7 +319,7 @@ def _test_observations(
     values = window_view(x_np, rows, cols)
     if not _keep_frame_labels(X):
         return values
-    selector = contiguous_row_slice(rows)
+    selector = _contiguous_row_slice(rows)
     row_sel: slice | NDArray[np.intp] = selector if selector is not None else rows
     columns = X.columns if cols is None else X.columns[np.asarray(cols, dtype=np.intp)]
     import pandas as pd
@@ -368,7 +368,7 @@ def make_segment_portfolio(
     portfolio : Portfolio
         Out-of-sample portfolio on the selected test observations.
     """
-    matrix = as_float_array(X) if x_np is None else x_np
+    matrix = np.ascontiguousarray(X, dtype=np.float64) if x_np is None else x_np
     x_test = _test_observations(X, idx, cols, x_np=matrix)
     extra = {} if segment_params is None else dict(segment_params)
     extra.pop("name", None)
@@ -428,7 +428,7 @@ def assemble_prediction(
     """
     extra = {} if portfolio_params is None else dict(portfolio_params)
     extra.setdefault("check_observations_order", False)
-    x_np = as_float_array(X)
+    x_np = np.ascontiguousarray(X, dtype=np.float64)
 
     if cv_plan.combinatorial or cv_plan.multi_path:
         path_lists: list[list[Portfolio]] = [[] for _ in range(cv_plan.n_paths)]
