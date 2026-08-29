@@ -209,6 +209,37 @@ Functions
     estimator_spec
     make_compact_engine
 
+.. _cosmo_ref:
+
+:mod:`skfolio_accelerate.cosmo`: Persistent COSMO.rs
+====================================================
+
+.. automodule:: skfolio_accelerate.cosmo
+    :no-members:
+    :no-inherited-members:
+
+.. currentmodule:: skfolio_accelerate.cosmo
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    cosmo_available
+    cosmo_persistence_api_available
+    default_persist_mode
+    make_cosmo_engine
+    formulation_table
+    persist_class_for
+
+.. currentmodule:: skfolio_accelerate.formulations
+
+.. autosummary::
+    :nosignatures:
+    :toctree: generated/
+    :template: class.rst
+
+    FormulationRecord
+
 .. _linear_lp_ref:
 
 :mod:`skfolio_accelerate.linear_lp`: Persistent HiGHS LPs

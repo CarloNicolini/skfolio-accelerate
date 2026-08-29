@@ -42,6 +42,17 @@ Runtime:
 - python (>= 3.10)
 - skfolio (>= 1.0, < 2)
 - osqp (>= 1.0, < 2)
+- highspy (>= 1.8)
+
+Optional:
+
+- ``skfolio-accelerate[cosmo]`` — native Rust COSMO.rs. See :ref:`cosmo`.
+  GitHub ``main`` Python bindings currently expose ``update_q`` /
+  ``update_b`` / ``warm_start``. Persistent ``update_p`` / ``update_a`` /
+  ``reset`` exist in the Rust solver; build a COSMO.rs checkout that
+  exports them (``maturin develop --release --features python``) for the
+  persistence experiment. Without those methods the compact path still
+  solves, but reconstructs the workspace each fold.
 
 NumPy, SciPy, Clarabel, pandas, and scikit-learn come from skfolio's own
 runtime stack.

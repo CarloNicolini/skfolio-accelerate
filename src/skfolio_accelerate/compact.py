@@ -7,6 +7,7 @@ Pure scenario LPs (MAD, FLPM, CVaR, worst realization, ``l2_coef=0``) use a
 persistent HiGHS simplex basis. Overlapping WalkForward windows keep scenario
 rows attached to the same auxiliary variables so later folds reoptimize from
 the previous basis. Variance stays OSQP; remaining scenario cones stay Clarabel.
+``backend="cosmo"`` swaps those compact problems onto persistent COSMO.rs.
 
 Equivalence with skfolio (see ``ConvexOptimization`` in skfolio 1.0):
 
@@ -184,10 +185,15 @@ class MeanRiskSpec:
     min_weights: Any
     max_weights: Any
     budget: float
+    solver: str = "CLARABEL"
 
     def needs_returns(self) -> bool:
         """``True`` when the risk measure consumes scenario returns."""
         return self.risk_measure is not RiskMeasure.VARIANCE
+
+    def uses_cosmo(self) -> bool:
+        """``True`` when this spec should dispatch to the COSMO.rs engines."""
+        return str(self.solver or "").upper() in {"COSMO", "COSMO_RS", "COSMO_RUST"}
 
 
 class CompactEngine(Protocol):
@@ -238,6 +244,7 @@ def estimator_spec(estimator) -> MeanRiskSpec:
         min_weights=getattr(estimator, "min_weights", 0.0),
         max_weights=getattr(estimator, "max_weights", 1.0),
         budget=float(getattr(estimator, "budget", 1.0) or 1.0),
+        solver=str(getattr(estimator, "solver", "CLARABEL") or "CLARABEL"),
     )
 
 
@@ -922,9 +929,13 @@ class ScenarioClarabel:
 
 
 def make_compact_engine(
-    spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None
+    spec: MeanRiskSpec,
+    *,
+    n_assets: int,
+    n_observations: int | None,
+    persist_mode: str | None = None,
 ) -> CompactEngine:
-    """Construct the OSQP or Clarabel engine for ``spec``.
+    """Construct the OSQP, Clarabel, HiGHS, or COSMO engine for ``spec``.
 
     Parameters
     ----------
@@ -938,11 +949,14 @@ def make_compact_engine(
         Training window length. Required for scenario risks; ignored for
         variance.
 
+    persist_mode : str, optional
+        COSMO persist mode. Ignored by OSQP / HiGHS / Clarabel.
+
     Returns
     -------
     engine : CompactEngine
-        :class:`MinVarianceOSQP`, :class:`CVaRClarabel`, or
-        :class:`ScenarioClarabel`.
+        :class:`MinVarianceOSQP`, :class:`CVaRClarabel`,
+        :class:`ScenarioClarabel`, :class:`LinearHighs`, or a COSMO engine.
 
     Raises
     ------
@@ -951,6 +965,15 @@ def make_compact_engine(
         a scenario risk.
     """
     risk = spec.risk_measure
+    if spec.uses_cosmo():
+        from skfolio_accelerate._cosmo import make_cosmo_engine
+
+        kwargs = {}
+        if persist_mode is not None:
+            kwargs["persist_mode"] = persist_mode
+        return make_cosmo_engine(
+            spec, n_assets=n_assets, n_observations=n_observations, **kwargs
+        )
     if risk is RiskMeasure.VARIANCE:
         return MinVarianceOSQP(spec, n_assets)
     if risk not in _SCENARIO_RISKS:
