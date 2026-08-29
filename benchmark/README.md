@@ -64,7 +64,8 @@ comparison run.
 uv sync --extra dev --extra docs
 source .venv/bin/activate
 
-python benchmark/run_benchmark.py --baseline --workers 1
+python benchmark/run_relative.py --base origin/main --workers 1
+python benchmark/run_relative.py --base origin/main --quick --workers 1 --no-figures
 python benchmark/run_benchmark.py
 python benchmark/run_benchmark.py --dataset synthetic
 python benchmark/run_benchmark.py --dataset sp500
@@ -76,7 +77,11 @@ python benchmark/run_benchmark.py --workers 1
 
 Useful flags: `--quick` (smoke sizes), `--full` (20-year sequential panel),
 `--cv walk-forward` (repeatable), `--include-gini`, `--include-annualized`,
-`--timeout SECONDS`, `--no-figures`.
+`--timeout SECONDS`, `--no-figures`, `--output-dir DIR`.
+
+PR vs `main` timing uses **in-run relative** benchmarking on one host (see
+`AGENTS.md` and `benchmark/run_relative.py`). Do not compare a PR's seconds to
+a CSV saved from an earlier job or laptop.
 
 Plotly is required to write figures (`docs` extra, or `pip install plotly kaleido`).
 Kaleido/Chrome is optional for SVG/PNG; HTML and Plotly JSON are always written.
@@ -85,7 +90,7 @@ Configuration defaults live in one place: `benchmark/config.py` (`CONFIG`).
 
 ## Result locations
 
-Each run writes a new directory (never overwrites):
+Each single-commit run writes a new directory (never overwrites):
 
 ```
 benchmark/results/YYYY-MM-DD_<git-short-sha>/
@@ -97,11 +102,21 @@ benchmark/results/YYYY-MM-DD_<git-short-sha>/
     figures/
 ```
 
-The first committed snapshot used `--quick` (synthetic 120×6, last 252 S&P 500
-return rows, WalkForward, one timed repetition after one warm-up). The official
-baseline is produced with `--baseline` (default `CONFIG`) and pointed to by
-`benchmark/results/baseline.json`. Coding agents must use this runner; see
-`AGENTS.md`.
+In-run PR vs main pairs land under:
+
+```
+benchmark/results/relative/YYYY-MM-DD_<head-sha>/
+    base/
+    head/
+    delta.csv
+    delta.json
+    summary.md
+```
+
+Δ% = `100 * (head_time - base_time) / base_time` (positive = head slower).
+
+Dated folders under `benchmark/results/` are archives of one commit, not the
+PR timing baseline. Coding agents must use `run_relative.py`; see `AGENTS.md`.
 
 Latest Plotly HTML/JSON copies are also placed in `benchmark/figures/`.
 

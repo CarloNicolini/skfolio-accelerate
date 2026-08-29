@@ -18,27 +18,22 @@ from benchmark.figures import (
     figure_execution_time,
     generate_all_figures,
 )
-from benchmark.io import (
-    parse_baseline_pointer,
-    parse_results_csv,
-    write_baseline_pointer,
-    write_csv,
-    write_json,
-    write_summary_md,
-)
+from benchmark.io import parse_results_csv, write_csv, write_json, write_summary_md
 from benchmark.metrics import (
     SCHEMA_FIELDS,
     attach_native_comparisons,
     delta_sharpe,
     delta_time,
     parse_raw_times,
+    relative_delta_pct,
     relative_sharpe_error,
     relative_time,
     speedup,
     timing_summary,
 )
 from benchmark.protocol import fold_index_fingerprint, make_cv
-from benchmark.run_benchmark import config_from_args, parse_args
+from benchmark.relative import compare_in_run_rows
+from benchmark.run_benchmark import parse_args
 
 
 def test_synthetic_data_is_deterministic():
@@ -170,6 +165,9 @@ def test_timing_and_sharpe_comparisons():
     assert math.isnan(compared_fail["speedup"])
     native_fail = attach_native_comparisons(failed_native, failed_native)
     assert math.isnan(native_fail["speedup"])
+    assert relative_delta_pct(10.0, 12.0) == pytest.approx(20.0)
+    assert relative_delta_pct(10.0, 8.0) == pytest.approx(-20.0)
+    assert math.isnan(relative_delta_pct(0.0, 1.0))
 
 
 def test_parse_raw_times_formats():
@@ -247,53 +245,48 @@ def test_json_writer_roundtrip(tmp_path: Path):
     assert payload["schema_version"] == SCHEMA_VERSION
 
 
-def test_baseline_cli_uses_default_config_and_rejects_protocol_overrides():
-    with pytest.raises(SystemExit, match="--baseline"):
-        config_from_args(parse_args(["--baseline", "--quick"]))
-    with pytest.raises(SystemExit, match="--baseline"):
-        config_from_args(parse_args(["--baseline", "--dataset", "synthetic"]))
-    with pytest.raises(SystemExit, match="--baseline"):
-        config_from_args(parse_args(["--baseline", "--repetitions", "1"]))
-    config = config_from_args(parse_args(["--baseline", "--workers", "1"]))
-    default = build_config()
-    assert config.synthetic_n_observations == default.synthetic_n_observations
-    assert config.synthetic_n_assets == default.synthetic_n_assets
-    assert config.repetitions == default.repetitions
-    assert config.warmups == default.warmups
-    assert config.datasets == ("synthetic", "sp500")
-    assert config.methods == ("native", "accelerated")
-    assert config.cv_kinds == ("walk-forward",)
-    assert config.workers == 1
+def test_output_dir_flag():
+    args = parse_args(["--output-dir", "/tmp/bench-out", "--quick"])
+    assert args.output_dir == Path("/tmp/bench-out")
+    assert args.quick is True
 
 
-def test_baseline_pointer_schema(tmp_path: Path):
-    run_dir = tmp_path / "2026-01-01_deadbeef"
-    run_dir.mkdir()
-    path = write_baseline_pointer(
-        tmp_path,
-        run_dir,
-        environment={
-            "git_sha": "deadbeef",
-            "timestamp": "t",
-            "packages": {"skfolio": "1.0.0"},
-        },
-    )
-    payload = parse_baseline_pointer(path)
-    assert payload["label"] == "baseline"
-    assert payload["run_directory"] == "2026-01-01_deadbeef"
-    assert payload["results_csv"].endswith("results.csv")
-    assert payload["speedup_definition"] == "native_time / accelerated_time"
-    assert (run_dir / "BASELINE").is_file()
-    broken = tmp_path / "bad.json"
-    broken.write_text("{}", encoding="utf-8")
-    with pytest.raises(ValueError, match="missing"):
-        parse_baseline_pointer(broken)
+def test_in_run_relative_delta_rows():
+    base = [
+        {
+            "dataset": "synthetic",
+            "cv": "walk-forward",
+            "estimator": "MINIMIZE_RISK/VARIANCE",
+            "method": "accelerated",
+            "time_s": 2.0,
+            "speedup": 4.0,
+            "mean_sharpe": 0.1,
+            "status": "ok",
+        }
+    ]
+    head = [
+        {
+            "dataset": "synthetic",
+            "cv": "walk-forward",
+            "estimator": "MINIMIZE_RISK/VARIANCE",
+            "method": "accelerated",
+            "time_s": 2.5,
+            "speedup": 3.2,
+            "mean_sharpe": 0.1,
+            "status": "ok",
+        }
+    ]
+    rows = compare_in_run_rows(base, head)
+    assert len(rows) == 1
+    assert rows[0]["delta_pct"] == pytest.approx(25.0)
+    assert rows[0]["delta_time_s"] == pytest.approx(0.5)
 
 
-def test_agents_md_requires_canonical_benchmark_runner():
+def test_agents_md_requires_in_run_relative_benchmark():
     text = Path(__file__).resolve().parents[1].joinpath("AGENTS.md").read_text()
+    assert "python benchmark/run_relative.py" in text
     assert "python benchmark/run_benchmark.py" in text
-    assert "--baseline" in text
-    assert "benchmark/results/baseline.json" in text
+    assert "100 * (head_time - base_time) / base_time" in text
     assert "native_time / accelerated_time" in text
     assert "benchmarks/benchmark_" in text
+    assert "baseline.json" not in text

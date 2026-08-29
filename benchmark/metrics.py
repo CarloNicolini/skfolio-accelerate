@@ -146,6 +146,17 @@ def relative_sharpe_error(native_sharpe: float, accelerated_sharpe: float) -> fl
     return float((accelerated_sharpe - native_sharpe) / abs(native_sharpe))
 
 
+def relative_delta_pct(base_time: float, head_time: float) -> float:
+    """Percentage change: ``100 * (head_time - base_time) / base_time``.
+
+    Positive values mean the head commit is slower. Undefined when ``base_time``
+    is missing, non-finite, or zero.
+    """
+    if not math.isfinite(base_time) or not math.isfinite(head_time) or base_time == 0.0:
+        return float("nan")
+    return float(100.0 * (head_time - base_time) / base_time)
+
+
 def _as_float(value: Any) -> float:
     if value is None or value == "":
         return float("nan")
