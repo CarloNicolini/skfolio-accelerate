@@ -266,12 +266,15 @@ def main(argv: list[str] | None = None) -> int:
                     row.update(_flatten_cell(cell))
                     rows.append(row)
                     time_s = cell.get("time_s")
-                    speed = ""
+                    try:
+                        time_txt = f"{float(time_s):.4f}s"
+                    except (TypeError, ValueError):
+                        time_txt = "nan"
                     print(
                         f"{dataset.name:<10} {cv_kind:<22} {spec.name:<44} "
                         f"{method:<12} {cell.get('status')} "
-                        f"{time_s if time_s is not None else float('nan'):.4f}s "
-                        f"{cell.get('backend') or ''} {speed}",
+                        f"{time_txt} "
+                        f"{cell.get('backend') or ''}",
                         flush=True,
                     )
 

@@ -154,6 +154,22 @@ def test_timing_and_sharpe_comparisons():
     assert compared["relative_time"] == 0.25
     assert compared["delta_sharpe"] == pytest.approx(0.05)
     assert compared["relative_sharpe_error"] == pytest.approx(0.05)
+    failed_native = {
+        "method": "native",
+        "time_s": None,
+        "mean_sharpe": None,
+        "status": "SolverError",
+    }
+    failed_acc = {
+        "method": "accelerated",
+        "time_s": None,
+        "mean_sharpe": None,
+        "status": "SolverError",
+    }
+    compared_fail = attach_native_comparisons(failed_acc, failed_native)
+    assert math.isnan(compared_fail["speedup"])
+    native_fail = attach_native_comparisons(failed_native, failed_native)
+    assert math.isnan(native_fail["speedup"])
 
 
 def test_parse_raw_times_formats():
