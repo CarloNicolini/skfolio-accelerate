@@ -89,9 +89,7 @@ def cosmo_persistence_api_available() -> bool:
         return False
     from cosmo_rs import CosmoSolver
 
-    return all(
-        hasattr(CosmoSolver, name) for name in ("update_p", "update_a", "reset")
-    )
+    return all(hasattr(CosmoSolver, name) for name in ("update_p", "update_a", "reset"))
 
 
 def default_persist_mode(spec: MeanRiskSpec) -> PersistMode:
