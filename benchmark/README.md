@@ -64,6 +64,7 @@ comparison run.
 uv sync --extra dev --extra docs
 source .venv/bin/activate
 
+python benchmark/run_benchmark.py --baseline --workers 1
 python benchmark/run_benchmark.py
 python benchmark/run_benchmark.py --dataset synthetic
 python benchmark/run_benchmark.py --dataset sp500
@@ -97,8 +98,10 @@ benchmark/results/YYYY-MM-DD_<git-short-sha>/
 ```
 
 The first committed snapshot used `--quick` (synthetic 120×6, last 252 S&P 500
-return rows, WalkForward, one timed repetition after one warm-up). Re-run
-without `--quick` (or with `--full`) for publication-scale windows.
+return rows, WalkForward, one timed repetition after one warm-up). The official
+baseline is produced with `--baseline` (default `CONFIG`) and pointed to by
+`benchmark/results/baseline.json`. Coding agents must use this runner; see
+`AGENTS.md`.
 
 Latest Plotly HTML/JSON copies are also placed in `benchmark/figures/`.
 

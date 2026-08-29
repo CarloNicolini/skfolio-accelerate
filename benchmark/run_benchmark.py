@@ -9,6 +9,7 @@ Examples
 --------
 ::
 
+    python benchmark/run_benchmark.py --baseline --workers 1
     python benchmark/run_benchmark.py
     python benchmark/run_benchmark.py --dataset synthetic
     python benchmark/run_benchmark.py --dataset sp500
@@ -45,8 +46,10 @@ from benchmark.environment import collect_environment, git_metadata  # noqa: E40
 from benchmark.estimators import mean_risk_specs  # noqa: E402
 from benchmark.figures import generate_all_figures  # noqa: E402
 from benchmark.io import (  # noqa: E402
+    BASELINE_COMMAND,
     apply_comparisons,
     run_directory,
+    write_baseline_pointer,
     write_csv,
     write_json,
     write_summary_md,
@@ -86,6 +89,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--warmups", type=int, default=None)
     parser.add_argument("--thread-limit", type=int, default=None)
     parser.add_argument("--timeout", type=float, default=None, dest="timeout_s")
+    parser.add_argument(
+        "--baseline",
+        action="store_true",
+        help=(
+            "run the official default CONFIG grid and update "
+            "benchmark/results/baseline.json"
+        ),
+    )
     parser.add_argument("--quick", action="store_true")
     parser.add_argument("--full", action="store_true")
     parser.add_argument("--include-gini", action="store_true")
@@ -100,6 +111,24 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def config_from_args(args: argparse.Namespace):
     if args.quick and args.full:
         raise SystemExit("choose at most one of --quick or --full")
+    if args.baseline and (args.quick or args.full):
+        raise SystemExit("--baseline cannot be combined with --quick or --full")
+    if args.baseline and (
+        args.dataset
+        or args.method
+        or args.cv_kinds
+        or args.repetitions is not None
+        or args.warmups is not None
+        or args.include_gini
+        or args.include_annualized
+        or args.skip_extras
+        or args.skip_lp_l2_zero
+        or args.n_jobs is not None
+    ):
+        raise SystemExit(
+            "--baseline freezes the default CONFIG grid; only --workers, "
+            "--thread-limit, --timeout, and --no-figures may be set"
+        )
     preset = "quick" if args.quick else ("full" if args.full else None)
     overrides = {
         "repetitions": args.repetitions,
@@ -118,6 +147,10 @@ def config_from_args(args: argparse.Namespace):
     datasets = tuple(args.dataset) if args.dataset else DATASETS
     methods = tuple(args.method) if args.method else METHODS
     cv_kinds = tuple(args.cv_kinds) if args.cv_kinds else None
+    if args.baseline:
+        datasets = DATASETS
+        methods = METHODS
+        cv_kinds = None
     return build_config(
         overrides,
         datasets=datasets,
@@ -257,6 +290,14 @@ def main(argv: list[str] | None = None) -> int:
     write_json(out_dir / "environment.json", environment)
     write_summary_md(out_dir / "summary.md", rows=rows, environment=environment)
     shutil.copy(BENCHMARK_ROOT / "ARCHITECTURE.md", out_dir / "ARCHITECTURE.md")
+    if args.baseline:
+        pointer = write_baseline_pointer(
+            RESULTS_ROOT,
+            out_dir,
+            environment=environment,
+            command=BASELINE_COMMAND,
+        )
+        print(f"Updated baseline pointer {pointer}", flush=True)
 
     figure_paths: list[Path] = []
     if not args.no_figures:

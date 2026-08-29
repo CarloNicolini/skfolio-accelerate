@@ -185,10 +185,12 @@ prediction = result.best_prediction_
 The canonical, version-controlled MeanRisk `cross_val_predict` suite (timing,
 speed-up, Sharpe, correctness diagnostics, environment metadata, Plotly
 figures, and historical `results/` snapshots) lives in
-[`benchmark/`](benchmark/README.md):
+[`benchmark/`](benchmark/README.md). Coding agents must use that runner and
+compare against [`benchmark/results/baseline.json`](benchmark/results/baseline.json);
+see [`AGENTS.md`](AGENTS.md).
 
 ```bash
-python benchmark/run_benchmark.py
+python benchmark/run_benchmark.py --baseline --workers 1
 python benchmark/run_benchmark.py --dataset synthetic
 python benchmark/run_benchmark.py --dataset sp500
 ```

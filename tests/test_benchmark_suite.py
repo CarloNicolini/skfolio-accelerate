@@ -18,7 +18,14 @@ from benchmark.figures import (
     figure_execution_time,
     generate_all_figures,
 )
-from benchmark.io import parse_results_csv, write_csv, write_json, write_summary_md
+from benchmark.io import (
+    parse_baseline_pointer,
+    parse_results_csv,
+    write_baseline_pointer,
+    write_csv,
+    write_json,
+    write_summary_md,
+)
 from benchmark.metrics import (
     SCHEMA_FIELDS,
     attach_native_comparisons,
@@ -31,6 +38,7 @@ from benchmark.metrics import (
     timing_summary,
 )
 from benchmark.protocol import fold_index_fingerprint, make_cv
+from benchmark.run_benchmark import config_from_args, parse_args
 
 
 def test_synthetic_data_is_deterministic():
@@ -221,3 +229,55 @@ def test_json_writer_roundtrip(tmp_path: Path):
     write_json(path, {"schema_version": SCHEMA_VERSION, "rows": []})
     payload = json.loads(path.read_text())
     assert payload["schema_version"] == SCHEMA_VERSION
+
+
+def test_baseline_cli_uses_default_config_and_rejects_protocol_overrides():
+    with pytest.raises(SystemExit, match="--baseline"):
+        config_from_args(parse_args(["--baseline", "--quick"]))
+    with pytest.raises(SystemExit, match="--baseline"):
+        config_from_args(parse_args(["--baseline", "--dataset", "synthetic"]))
+    with pytest.raises(SystemExit, match="--baseline"):
+        config_from_args(parse_args(["--baseline", "--repetitions", "1"]))
+    config = config_from_args(parse_args(["--baseline", "--workers", "1"]))
+    default = build_config()
+    assert config.synthetic_n_observations == default.synthetic_n_observations
+    assert config.synthetic_n_assets == default.synthetic_n_assets
+    assert config.repetitions == default.repetitions
+    assert config.warmups == default.warmups
+    assert config.datasets == ("synthetic", "sp500")
+    assert config.methods == ("native", "accelerated")
+    assert config.cv_kinds == ("walk-forward",)
+    assert config.workers == 1
+
+
+def test_baseline_pointer_schema(tmp_path: Path):
+    run_dir = tmp_path / "2026-01-01_deadbeef"
+    run_dir.mkdir()
+    path = write_baseline_pointer(
+        tmp_path,
+        run_dir,
+        environment={
+            "git_sha": "deadbeef",
+            "timestamp": "t",
+            "packages": {"skfolio": "1.0.0"},
+        },
+    )
+    payload = parse_baseline_pointer(path)
+    assert payload["label"] == "baseline"
+    assert payload["run_directory"] == "2026-01-01_deadbeef"
+    assert payload["results_csv"].endswith("results.csv")
+    assert payload["speedup_definition"] == "native_time / accelerated_time"
+    assert (run_dir / "BASELINE").is_file()
+    broken = tmp_path / "bad.json"
+    broken.write_text("{}", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing"):
+        parse_baseline_pointer(broken)
+
+
+def test_agents_md_requires_canonical_benchmark_runner():
+    text = Path(__file__).resolve().parents[1].joinpath("AGENTS.md").read_text()
+    assert "python benchmark/run_benchmark.py" in text
+    assert "--baseline" in text
+    assert "benchmark/results/baseline.json" in text
+    assert "native_time / accelerated_time" in text
+    assert "benchmarks/benchmark_" in text
