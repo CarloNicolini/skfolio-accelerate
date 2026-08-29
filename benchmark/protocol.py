@@ -224,12 +224,11 @@ def run_method_cell(
             estimator, cv=probe_cv, n_jobs=n_jobs
         ).auto_backend(estimator)
 
-    for _ in range(config.warmups):
-        _call_with_timeout(config.timeout_s, invoke)
-
     prediction = None
     report = None
     try:
+        for _ in range(config.warmups):
+            _call_with_timeout(config.timeout_s, invoke)
         validated = _call_with_timeout(config.timeout_s, invoke)
     except BenchmarkTimeout as error:
         return {
