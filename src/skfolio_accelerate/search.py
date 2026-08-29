@@ -16,7 +16,6 @@ import numpy as np
 from sklearn.base import clone
 from sklearn.model_selection import ParameterGrid
 
-from skfolio_accelerate._arrays import as_float_2d
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec, estimator_spec
 from skfolio_accelerate.cv_plan import compile_cv_plan
 from skfolio_accelerate.moments import path_moment_session
@@ -151,7 +150,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     started = time.perf_counter()
     params, specs = _candidate_specs(estimator, param_grid, y=y, cv=cv)
 
-    x_arr = as_float_2d(X)
+    x_arr = np.ascontiguousarray(X, dtype=np.float64)
     cv_plan = compile_cv_plan(cv, X, y)
     keep_returns = any(spec.needs_returns() for spec in specs)
 

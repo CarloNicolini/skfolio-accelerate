@@ -30,19 +30,32 @@ from dataclasses import dataclass
 import numpy as np
 from numpy.typing import NDArray
 
-from skfolio_accelerate._arrays import as_float_2d, contiguous_row_slice
 from skfolio_accelerate.cv_plan import FoldSpec
 
 __all__ = [
     "FoldMoments",
     "OverlapMomentCache",
     "PathMomentSession",
-    "as_float_2d",
     "empirical_from_stats",
     "empirical_from_window",
     "is_default_empirical",
     "path_moment_session",
 ]
+
+
+def _contiguous_row_slice(rows: NDArray[np.intp]) -> slice | None:
+    """Return ``slice(start, stop)`` when ``rows`` is a contiguous increasing range."""
+    if rows.ndim != 1 or rows.size == 0:
+        return None
+    start = int(rows[0])
+    stop = int(rows[-1]) + 1
+    if start < 0 or stop - start != rows.size:
+        return None
+    if rows.size > 1 and int(rows[1]) != start + 1:
+        return None
+    if rows.size > 2 and int(rows[rows.size // 2]) != start + rows.size // 2:
+        return None
+    return slice(start, stop)
 
 
 @dataclass(slots=True)
@@ -255,7 +268,7 @@ class OverlapMomentCache:
         if self._blocks is not None and fold.train_block_ids:
             return self._from_blocks(fold)
 
-        bounds = contiguous_row_slice(fold.train_idx)
+        bounds = _contiguous_row_slice(fold.train_idx)
         if bounds is None or path_key in self._indexed:
             return self._from_index_rows(fold.train_idx, path_key)
 
