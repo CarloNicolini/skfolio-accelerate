@@ -182,6 +182,20 @@ prediction = result.best_prediction_
 
 ## Benchmarks
 
+The canonical, version-controlled MeanRisk `cross_val_predict` suite (timing,
+speed-up, Sharpe, correctness diagnostics, environment metadata, Plotly
+figures, and historical `results/` snapshots) lives in
+[`benchmark/`](benchmark/README.md):
+
+```bash
+python benchmark/run_benchmark.py
+python benchmark/run_benchmark.py --dataset synthetic
+python benchmark/run_benchmark.py --dataset sp500
+```
+
+The scripts in `benchmarks/` are exploratory / README-figure sources. Prefer
+`benchmark/` for performance and numerical regressions.
+
 `backend="auto"` is measured on every non-annualized `ObjectiveFunction` ×
 `RiskMeasure` pair, plus a few extra MeanRisk options, across three CV
 protocols. The large multiplicative win is still **boxed variance with many

@@ -40,6 +40,10 @@ docs = [
   "plotly>=5.0",
   "kaleido>=0.2.1",
 ]
+benchmark = [
+  "plotly>=5.0",
+  "kaleido>=0.2.1",
+]
 
 [project.urls]
 Documentation = "https://carlonicolini.github.io/skfolio-accelerate/"
