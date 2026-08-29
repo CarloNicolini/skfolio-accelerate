@@ -1469,5 +1469,3 @@ def cross_val_predict(
     )
     return (pred, report) if return_report else pred
 
-
-massive_cross_val_predict = cross_val_predict
