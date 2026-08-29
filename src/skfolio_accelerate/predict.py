@@ -57,6 +57,10 @@ from skfolio_accelerate.moments import (
     is_default_empirical,
     path_moment_session,
 )
+from skfolio_accelerate.linear_lp import (
+    continuation_unhelpful_reason,
+    is_highs_lp_risk,
+)
 from skfolio_accelerate.scoring import assemble_prediction, window_view
 
 BackendName = Literal[
@@ -92,50 +96,50 @@ _SUPPORTED_RISKS = frozenset(
         RiskMeasure.EDAR,
     }
 )
-_UNSUPPORTED_IF_SET = (
-    ("min_budget", "minimum budget"),
-    ("max_budget", "maximum budget"),
-    ("max_short", "maximum short exposure"),
-    ("max_long", "maximum long exposure"),
-    ("cardinality", "cardinality (MIP)"),
-    ("group_cardinalities", "group_cardinalities (MIP)"),
-    ("threshold_long", "threshold_long (MIP)"),
-    ("threshold_short", "threshold_short (MIP)"),
-    ("previous_weights", "previous weights"),
-    ("target_weights", "target weights"),
-    ("groups", "groups"),
-    ("linear_constraints", "linear constraints"),
-    ("left_inequality", "left inequality"),
-    ("right_inequality", "right inequality"),
-    ("add_constraints", "add_constraints"),
-    ("add_objective", "add_objective"),
-    ("overwrite_expected_return", "overwrite_expected_return"),
-    ("efficient_frontier_size", "efficient_frontier_size"),
-    ("mu_uncertainty_set_estimator", "mu uncertainty sets"),
-    ("covariance_uncertainty_set_estimator", "covariance uncertainty sets"),
-    ("min_return", "minimum return"),
-    ("max_tracking_error", "maximum tracking error"),
-    ("max_turnover", "maximum turnover"),
-    ("max_mean_absolute_deviation", "maximum mean absolute deviation"),
-    ("max_first_lower_partial_moment", "maximum first lower partial moment"),
-    ("max_variance", "maximum variance"),
-    ("max_standard_deviation", "maximum standard deviation"),
-    ("max_semi_variance", "maximum semi-variance"),
-    ("max_semi_deviation", "maximum semi-deviation"),
-    ("max_worst_realization", "maximum worst realization"),
-    ("max_cvar", "maximum CVaR"),
-    ("max_evar", "maximum EVaR"),
-    ("max_max_drawdown", "maximum drawdown"),
-    ("max_average_drawdown", "maximum average drawdown"),
-    ("max_cdar", "maximum CDaR"),
-    ("max_edar", "maximum EDaR"),
-    ("max_ulcer_index", "maximum ulcer index"),
-    ("max_gini_mean_difference", "maximum Gini mean difference"),
-    ("solver_params", "custom solver parameters"),
-    ("scale_objective", "custom objective scaling"),
-    ("scale_constraints", "custom constraint scaling"),
-    ("portfolio_params", "estimator portfolio parameters"),
-    ("fallback", "fallback estimator"),
+_COMPACT_NONE_ATTRS = (
+    "min_budget",
+    "max_budget",
+    "max_short",
+    "max_long",
+    "cardinality",
+    "group_cardinalities",
+    "threshold_long",
+    "threshold_short",
+    "previous_weights",
+    "target_weights",
+    "groups",
+    "linear_constraints",
+    "left_inequality",
+    "right_inequality",
+    "add_constraints",
+    "add_objective",
+    "overwrite_expected_return",
+    "efficient_frontier_size",
+    "mu_uncertainty_set_estimator",
+    "covariance_uncertainty_set_estimator",
+    "min_return",
+    "max_tracking_error",
+    "max_turnover",
+    "max_mean_absolute_deviation",
+    "max_first_lower_partial_moment",
+    "max_variance",
+    "max_standard_deviation",
+    "max_semi_variance",
+    "max_semi_deviation",
+    "max_worst_realization",
+    "max_cvar",
+    "max_evar",
+    "max_max_drawdown",
+    "max_average_drawdown",
+    "max_cdar",
+    "max_edar",
+    "max_ulcer_index",
+    "max_gini_mean_difference",
+    "solver_params",
+    "scale_objective",
+    "scale_constraints",
+    "portfolio_params",
+    "fallback",
 )
 
 _CLOSED_FORM_TYPES = (EqualWeighted, InverseVolatility, Random)
@@ -159,75 +163,10 @@ class AccelerationWarning(UserWarning):
 
 @dataclass
 class AccelerationReport:
-    """Diagnostics for one :func:`cross_val_predict` or :func:`grid_search` call.
+    """Diagnostics for one :func:`cross_val_predict` call.
 
-    Returned when ``return_report=True``. The ``backend`` field identifies which
-    execution path ran; ``fallback_reason`` explains native skfolio or
-    fit-assemble fallbacks.
-
-    Attributes
-    ----------
-    backend : str
-        Selected execution backend. One of ``"osqp"``, ``"highs"``,
-        ``"clarabel"``, ``"cvxpy-sequential"``, ``"closed-form"``,
-        ``"fit-assemble"``, ``"sklearn"``, or ``"compact-grid"``.
-
-        * ``"osqp"`` — compact mean-variance QP.
-        * ``"highs"`` — compact scenario LP with persistent HiGHS simplex.
-        * ``"clarabel"`` — compact scenario QP / SOCP / exponential cone.
-        * ``"cvxpy-sequential"`` — reuse skfolio's MeanRisk CVXPY problem.
-        * ``"closed-form"`` — EqualWeighted, Random, or InverseVolatility.
-        * ``"fit-assemble"`` — native ``fit`` with portfolio assembly from
-          ``weights_``.
-        * ``"sklearn"`` — unmodified skfolio ``cross_val_predict``.
-          ``backend="auto"`` also selects this for boxed MAD/FLPM on
-          CombinatorialPurgedCV (persistent simplex is slower there) and emits
-          :class:`AccelerationWarning`.
-        * ``"compact-grid"`` — shared compact path inside :func:`grid_search``.
-
-    n_solves : int, default=0
-        Number of fold solves (compact, closed-form, or native ``fit``).
-
-    n_prior_fits : int, default=0
-        Cold Gram / sufficient-statistic computations in the moment cache.
-
-    n_prior_updates : int, default=0
-        Rank-k sliding-window or CPCV block updates that avoided a full
-        ``X.T @ X``.
-
-    n_warm_starts : int, default=0
-        Successful OSQP / HiGHS / Clarabel / CVXPY warm starts across folds.
-
-    n_rebuilds : int, default=0
-        CVXPY graphs compiled by sequential MeanRisk reuse.
-
-    is_dpp : bool or None, default=None
-        Whether the reused CVXPY problem is DPP, when sequential reuse ran.
-
-    reason : str or None, default=None
-        Why ``backend="auto"`` selected this engine.
-
-    fallback_reason : str or None, default=None
-        Human-readable reason when the preferred compact path was not used, or
-        ``None`` when no fallback occurred.
-
-    moments_s, solve_s, eval_s, wall_s : float, default=0.0
-        Wall-clock seconds spent on moments, solves, portfolio assembly, and
-        the full call respectively.
-
-    baseline_s : float, default=0.0
-        Optional native baseline time filled by benchmark helpers.
-
-    speedup : float, default=nan
-        ``baseline_s / wall_s`` when a baseline was recorded.
-
-    Examples
-    --------
-    >>> pred, report = cross_val_predict(
-    ...     MeanRisk(), X, cv=cv, return_report=True
-    ... )  # doctest: +SKIP
-    >>> print(report.backend)  # doctest: +SKIP
-    osqp
+    Returned when ``return_report=True``. ``backend`` is the execution
+    path; ``fallback_reason`` explains native or fit-assemble fallbacks.
     """
 
     backend: BackendName | str
@@ -362,110 +301,119 @@ def _compact_backend_name(estimator) -> BackendName:
     """OSQP, HiGHS, or Clarabel for a compact-eligible estimator."""
     if type(estimator) in _CLOSED_FORM_TYPES:
         return "closed-form"
-    risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
-    if risk is RiskMeasure.VARIANCE:
+    if estimator.risk_measure is RiskMeasure.VARIANCE:
         return "osqp"
-    from skfolio_accelerate.linear_lp import is_highs_lp_risk
-
     if is_highs_lp_risk(estimator_spec(estimator)):
         return "highs"
     return "clarabel"
 
 
-def blocked_reason(estimator) -> str | None:
-    """Why the compact engine cannot run this estimator, or ``None`` if it can.
+def _first_set_attr(obj, attrs: tuple[str, ...]) -> str | None:
+    state = obj.__dict__
+    for name in attrs:
+        if state[name] is not None:
+            return name
+    return None
 
-    Compact eligibility is intentionally narrow. The engine must reproduce the
-    same boxed MeanRisk problem that skfolio builds with CVXPY. Any option that
-    would change that problem (MIP constraints, custom priors, risk limits,
-    sequential ``previous_weights``, pipelines, ...) returns a short reason
-    string instead of silently approximating.
 
-    Parameters
-    ----------
-    estimator : estimator instance
-        Portfolio optimization estimator to inspect. Closed-form types
-        (:class:`~skfolio.optimization.EqualWeighted`,
-        :class:`~skfolio.optimization.Random`,
-        :class:`~skfolio.optimization.InverseVolatility`) are accepted when
-        they use default settings. Otherwise the estimator must be
-        :class:`~skfolio.optimization.MeanRisk`.
+def _closed_form_blocked(estimator) -> str | None:
+    if estimator.fallback is not None:
+        return "fallback estimator is not compacted"
+    if estimator.previous_weights is not None:
+        return "previous weights are not compacted"
+    if estimator.raise_on_failure is not True:
+        return "raise_on_failure=False is not compacted"
+    if estimator.portfolio_params is not None:
+        return "estimator portfolio parameters are not compacted"
+    if type(estimator) is InverseVolatility and not is_default_empirical(estimator):
+        return "custom prior is not compacted"
+    return None
 
-    Returns
-    -------
-    reason : str or None
-        ``None`` when the estimator is eligible for the compact OSQP / Clarabel
-        path. Otherwise a short English phrase describing the blocking option.
 
-    Notes
-    -----
-    This function only inspects the estimator object. Call-level options such
-    as ``n_jobs``, ``method``, or shuffled CV are checked by
-    :func:`compact_blocked_reason`.
-
-    See Also
-    --------
-    compact_blocked_reason
-    assemble_blocked_reason
-    classify_call
-    """
-    if isinstance(estimator, Pipeline):
-        return "pipelines use skfolio cross_val_predict"
-    if type(estimator) in _CLOSED_FORM_TYPES:
-        if getattr(estimator, "fallback", None) is not None:
-            return "fallback estimator is not compacted"
-        if getattr(estimator, "previous_weights", None) is not None:
-            return "previous weights are not compacted"
-        if getattr(estimator, "raise_on_failure", True) is not True:
-            return "raise_on_failure=False is not compacted"
-        if getattr(estimator, "portfolio_params", None) is not None:
-            return "estimator portfolio parameters are not compacted"
-        if type(estimator) is InverseVolatility and not is_default_empirical(estimator):
-            return "custom prior is not compacted"
-        return None
-    if not isinstance(estimator, MeanRisk):
-        return f"estimator {type(estimator).__name__} is not MeanRisk"
-    for attr, label in _UNSUPPORTED_IF_SET:
-        if getattr(estimator, attr, None) is not None:
-            return f"{label} is not compacted"
-    if getattr(estimator, "budget", 1.0) is None:
+def _mean_risk_compact_blocked(estimator: MeanRisk) -> str | None:
+    if name := _first_set_attr(estimator, _COMPACT_NONE_ATTRS):
+        return f"{name} is not compacted"
+    if estimator.budget is None:
         return "an unspecified equality budget is not compacted"
-    if getattr(estimator, "needs_previous_weights", False):
+    if estimator.needs_previous_weights:
         return "sequential previous_weights (costs, turnover, or fallback)"
-    objective = getattr(
-        estimator, "objective_function", ObjectiveFunction.MINIMIZE_RISK
-    )
-    if objective not in _SUPPORTED_OBJECTIVES:
+    if estimator.objective_function not in _SUPPORTED_OBJECTIVES:
         return "objective_function is not compacted"
-    risk = getattr(estimator, "risk_measure", RiskMeasure.VARIANCE)
+    risk = estimator.risk_measure
     if risk not in _SUPPORTED_RISKS:
         return "risk_measure is not compacted"
-    solver = getattr(estimator, "solver", "CLARABEL")
-    if risk is RiskMeasure.VARIANCE:
-        if solver not in {"CLARABEL", "OSQP"}:
-            return f"solver {solver!r} is not compacted for {risk.name}"
-    elif solver != "CLARABEL":
-        return f"solver {solver!r} is not compacted for {risk.name}"
-    if _nonzero(getattr(estimator, "l1_coef", 0.0)):
+    allowed = {"CLARABEL", "OSQP"} if risk is RiskMeasure.VARIANCE else {"CLARABEL"}
+    if estimator.solver not in allowed:
+        return f"solver {estimator.solver!r} is not compacted for {risk.name}"
+    if _nonzero(estimator.l1_coef):
         return "l1_coef is not compacted"
-    if isinstance(getattr(estimator, "min_weights", 0.0), dict) or isinstance(
-        getattr(estimator, "max_weights", 1.0), dict
-    ):
+    if type(estimator.min_weights) is dict or type(estimator.max_weights) is dict:
         return "dict weight bounds are not compacted"
-    if isinstance(getattr(estimator, "min_acceptable_return", None), dict):
+    if type(estimator.min_acceptable_return) is dict:
         return "dict minimum acceptable returns are not compacted"
-    if _nonzero(getattr(estimator, "transaction_costs", 0.0)):
+    if _nonzero(estimator.transaction_costs):
         return "transaction costs are not compacted"
-    if _nonzero(getattr(estimator, "management_fees", 0.0)):
+    if _nonzero(estimator.management_fees):
         return "management fees are not compacted"
-    if _nonzero(getattr(estimator, "risk_free_rate", 0.0)):
+    if _nonzero(estimator.risk_free_rate):
         return "a non-zero risk-free rate is not compacted"
-    if getattr(estimator, "raise_on_failure", True) is not True:
+    if estimator.raise_on_failure is not True:
         return "raise_on_failure=False is not compacted"
-    if getattr(estimator, "save_problem", False):
+    if estimator.save_problem:
         return "saved CVXPY problem state is not compacted"
     if not is_default_empirical(estimator):
         return "custom prior is not compacted"
+    return None
+
+
+def blocked_reason(estimator) -> str | None:
+    """Why the compact engine cannot run this estimator, or ``None`` if it can.
+
+    Compact eligibility is intentionally narrow: the engine must reproduce the
+    boxed MeanRisk problem skfolio builds with CVXPY. Options that would change
+    that problem return a short reason instead of silently approximating.
+
+    See Also
+    --------
+    compact_blocked_reason, assemble_blocked_reason, classify_call
+    """
+    match estimator:
+        case Pipeline():
+            return "pipelines use skfolio cross_val_predict"
+        case EqualWeighted() | InverseVolatility() | Random():
+            return _closed_form_blocked(estimator)
+        case MeanRisk():
+            return _mean_risk_compact_blocked(estimator)
+        case _:
+            return f"estimator {type(estimator).__name__} is not MeanRisk"
+
+
+def _call_options_blocked(
+    *,
+    method: str,
+    params: dict | None,
+    column_indices,
+    entry_rebalancing_params: dict | None,
+    cv=None,
+    n_jobs: int | None | object = ...,
+    verb: str,
+) -> str | None:
+    """Shared call-level gates for compact / assemble / sequential paths."""
+    if method != "predict":
+        return f"only method='predict' is {verb}"
+    if params:
+        return "fit params use skfolio cross_val_predict"
+    if column_indices is not None:
+        return "column_indices uses skfolio cross_val_predict"
+    if entry_rebalancing_params is not None:
+        return "entry_rebalancing_params uses skfolio cross_val_predict"
+    if n_jobs is not ... and n_jobs not in (None, 1):
+        return "n_jobs!=1 uses skfolio cross_val_predict"
+    try:
+        if cv.shuffle is True:
+            return "shuffled CV uses skfolio cross_val_predict"
+    except AttributeError:
+        pass
     return None
 
 
@@ -479,57 +427,17 @@ def compact_blocked_reason(
     entry_rebalancing_params: dict | None = None,
     cv=None,
 ) -> str | None:
-    """Why this call cannot use the compact engine.
-
-    Combines estimator checks from :func:`blocked_reason` with call-level
-    options that force the native skfolio path.
-
-    Parameters
-    ----------
-    estimator : estimator instance
-        Portfolio optimization estimator.
-
-    y : array-like of shape (n_observations,) or (n_observations, n_assets), optional
-        Target passed through for API compatibility. Unused by the compact gate.
-
-    method : str, default="predict"
-        Prediction method. Only ``"predict"`` is compacted.
-
-    params : dict, optional
-        Extra ``fit`` parameters. Any non-empty mapping disables compaction.
-
-    column_indices : array-like, optional
-        Per-split asset subsets outside MultipleRandomizedCV. Not compacted.
-
-    entry_rebalancing_params : dict, optional
-        Entry-rebalancing metadata. Not compacted.
-
-    cv : int, cross-validation generator or an iterable, optional
-        Splitter. Shuffled CV (``shuffle=True``) is not compacted.
-
-    Returns
-    -------
-    reason : str or None
-        ``None`` when compact OSQP / Clarabel may run; otherwise a short reason.
-
-    See Also
-    --------
-    blocked_reason
-    assemble_blocked_reason
-    classify_call
-    """
-    if method != "predict":
-        return "only method='predict' is compacted"
-    if params:
-        return "fit params use skfolio cross_val_predict"
-    if column_indices is not None:
-        return "column_indices uses skfolio cross_val_predict"
-    if entry_rebalancing_params is not None:
-        return "entry_rebalancing_params uses skfolio cross_val_predict"
-    if getattr(cv, "shuffle", False) is True:
-        return "shuffled CV uses skfolio cross_val_predict"
-    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
+    """Why this call cannot use the compact engine."""
+    del y  # API compatibility with skfolio
+    if reason := _call_options_blocked(
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        cv=cv,
+        verb="compacted",
+    ):
+        return reason
     return continuation_unhelpful_reason(estimator, cv) or blocked_reason(estimator)
 
 
@@ -543,71 +451,33 @@ def assemble_blocked_reason(
     n_jobs: int | None = None,
     cv=None,
 ) -> str | None:
-    """Why this call cannot fit natively and assemble from ``weights_``.
-
-    The fit-assemble path still calls the estimator's native ``fit``, then builds
-    test portfolios from ``weights_``. It skips joblib, train/test copies, and
-    ``predict()`` construction for serial ``n_jobs`` in ``{None, 1}``.
-
-    Parameters
-    ----------
-    estimator : estimator instance
-        Must be a :class:`~skfolio.optimization.BaseOptimization` (not a
-        :class:`~sklearn.pipeline.Pipeline`).
-
-    method : str, default="predict"
-        Only ``"predict"`` is assembled from weights.
-
-    params : dict, optional
-        Extra ``fit`` parameters. Any non-empty mapping disables assembly.
-
-    column_indices : array-like, optional
-        External column routing. Not assembled.
-
-    entry_rebalancing_params : dict, optional
-        Entry-rebalancing metadata. Not assembled.
-
-    n_jobs : int or None, default=None
-        Parallelism. Values other than ``None`` or ``1`` use native skfolio.
-
-    cv : int, cross-validation generator or an iterable, optional
-        Splitter. Shuffled CV is not assembled.
-
-    Returns
-    -------
-    reason : str or None
-        ``None`` when fit-assemble is allowed; otherwise a short reason.
-
-    See Also
-    --------
-    compact_blocked_reason
-    classify_call
-    """
-    if method != "predict":
-        return "only method='predict' is assembled from weights"
-    if params:
-        return "fit params use skfolio cross_val_predict"
-    if column_indices is not None:
-        return "column_indices uses skfolio cross_val_predict"
-    if entry_rebalancing_params is not None:
-        return "entry_rebalancing_params uses skfolio cross_val_predict"
-    if n_jobs not in (None, 1):
-        return "n_jobs!=1 uses skfolio cross_val_predict"
-    if getattr(cv, "shuffle", False) is True:
-        return "shuffled CV uses skfolio cross_val_predict"
-    if isinstance(estimator, Pipeline):
-        return "pipelines use skfolio cross_val_predict"
-    if not isinstance(estimator, BaseOptimization):
-        return f"estimator {type(estimator).__name__} is not a portfolio optimizer"
-    if getattr(estimator, "needs_previous_weights", False):
-        return "sequential previous_weights (costs, turnover, or fallback)"
-    if getattr(estimator, "raise_on_failure", True) is not True:
-        return "raise_on_failure=False uses skfolio cross_val_predict"
-    if getattr(estimator, "efficient_frontier_size", None) is not None:
-        return "efficient_frontier_size uses skfolio cross_val_predict"
-    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
-    return continuation_unhelpful_reason(estimator, cv)
+    """Why this call cannot fit natively and assemble from ``weights_``."""
+    if reason := _call_options_blocked(
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        cv=cv,
+        n_jobs=n_jobs,
+        verb="assembled from weights",
+    ):
+        return reason
+    match estimator:
+        case Pipeline():
+            return "pipelines use skfolio cross_val_predict"
+        case BaseOptimization():
+            if estimator.needs_previous_weights:
+                return "sequential previous_weights (costs, turnover, or fallback)"
+            if estimator.raise_on_failure is not True:
+                return "raise_on_failure=False uses skfolio cross_val_predict"
+            if (
+                type(estimator) in {MeanRisk, ParametricMeanRisk}
+                and estimator.efficient_frontier_size is not None
+            ):
+                return "efficient_frontier_size uses skfolio cross_val_predict"
+            return continuation_unhelpful_reason(estimator, cv)
+        case _:
+            return f"estimator {type(estimator).__name__} is not a portfolio optimizer"
 
 
 def sequential_blocked_reason(
@@ -620,45 +490,7 @@ def sequential_blocked_reason(
     n_jobs: int | None = None,
     cv=None,
 ) -> str | None:
-    """Why this call cannot reuse a Parameterized MeanRisk CVXPY problem.
-
-    Serial call options are the same gate as :func:`assemble_blocked_reason`.
-    On top of that, ratio homogenization, custom CVXPY hooks, uncertainty
-    sets, tracking error, and MeanRisk subclasses stay off this path.
-
-    Parameters
-    ----------
-    estimator : estimator instance
-        Portfolio optimization estimator.
-
-    method : str, default="predict"
-        Only ``"predict"`` is sequential.
-
-    params : dict, optional
-        Extra ``fit`` parameters. Any non-empty mapping disables reuse.
-
-    column_indices : array-like, optional
-        External column routing. Not sequential.
-
-    entry_rebalancing_params : dict, optional
-        Entry-rebalancing metadata. Not sequential.
-
-    n_jobs : int or None, default=None
-        Parallelism. Values other than ``None`` or ``1`` use native skfolio.
-
-    cv : int, cross-validation generator or an iterable, optional
-        Splitter. Shuffled CV is not sequential.
-
-    Returns
-    -------
-    reason : str or None
-        ``None`` when sequential reuse may run.
-
-    See Also
-    --------
-    assemble_blocked_reason
-    classify_call
-    """
+    """Why this call cannot reuse a Parameterized MeanRisk CVXPY problem."""
     reason = assemble_blocked_reason(
         estimator,
         method=method,
@@ -672,27 +504,22 @@ def sequential_blocked_reason(
         return reason
     if type(estimator) not in {MeanRisk, ParametricMeanRisk}:
         return f"estimator {type(estimator).__name__} is not MeanRisk"
-    if getattr(estimator, "objective_function", None) is (
-        ObjectiveFunction.MAXIMIZE_RATIO
-    ):
+    if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RATIO:
         return "MAXIMIZE_RATIO homogenization is not parameterized"
-    if getattr(estimator, "add_constraints", None) is not None:
+    if estimator.add_constraints is not None:
         return "add_constraints uses fit-assemble"
-    if getattr(estimator, "add_objective", None) is not None:
+    if estimator.add_objective is not None:
         return "add_objective uses fit-assemble"
-    if getattr(estimator, "overwrite_expected_return", None) is not None:
+    if estimator.overwrite_expected_return is not None:
         return "overwrite_expected_return uses fit-assemble"
-    if getattr(estimator, "mu_uncertainty_set_estimator", None) is not None:
+    if estimator.mu_uncertainty_set_estimator is not None:
         return "mu uncertainty sets use fit-assemble"
-    if getattr(estimator, "covariance_uncertainty_set_estimator", None) is not None:
+    if estimator.covariance_uncertainty_set_estimator is not None:
         return "covariance uncertainty sets use fit-assemble"
-    if getattr(estimator, "max_tracking_error", None) is not None:
+    if estimator.max_tracking_error is not None:
         return "tracking error is not parameterized"
-    fallback = getattr(estimator, "fallback", None)
-    if fallback not in (None, "previous_weights"):
+    if estimator.fallback not in (None, "previous_weights"):
         return "fallback estimator uses skfolio cross_val_predict"
-    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
     return continuation_unhelpful_reason(estimator, cv)
 
 
@@ -707,62 +534,22 @@ def classify_call(
     n_jobs: int | None = None,
     cv=None,
 ) -> CallCapabilities:
-    """Map estimator and call options to compact / sequential / assemble eligibility.
-
-    Gates are independent. A MeanRisk configuration may be ineligible for the
-    cone engines yet still eligible for Parameterized CVXPY reuse or for serial
-    native ``fit`` plus weight assembly.
-
-    Parameters
-    ----------
-    estimator : estimator instance
-        Portfolio optimization estimator.
-
-    y, method, params, column_indices, entry_rebalancing_params, n_jobs, cv
-        Same meaning as in :func:`cross_val_predict`.
-
-    Returns
-    -------
-    capabilities : CallCapabilities
-        Independent compact, sequential, and assemble reasons. Use
-        ``capabilities.can_compact`` / ``capabilities.can_sequential`` /
-        ``capabilities.can_assemble``.
-
-    Examples
-    --------
-    >>> caps = classify_call(MeanRisk(), cv=cv)  # doctest: +SKIP
-    >>> caps.can_compact  # doctest: +SKIP
-    True
-    """
+    """Map estimator and call options to compact / sequential / assemble eligibility."""
+    call_kw = dict(
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        cv=cv,
+    )
     return CallCapabilities(
-        compact_reason=compact_blocked_reason(
-            estimator,
-            y=y,
-            method=method,
-            params=params,
-            column_indices=column_indices,
-            entry_rebalancing_params=entry_rebalancing_params,
-            cv=cv,
-        ),
-        assemble_reason=assemble_blocked_reason(
-            estimator,
-            method=method,
-            params=params,
-            column_indices=column_indices,
-            entry_rebalancing_params=entry_rebalancing_params,
-            n_jobs=n_jobs,
-            cv=cv,
-        ),
+        compact_reason=compact_blocked_reason(estimator, y=y, **call_kw),
+        assemble_reason=assemble_blocked_reason(estimator, n_jobs=n_jobs, **call_kw),
         sequential_reason=sequential_blocked_reason(
-            estimator,
-            method=method,
-            params=params,
-            column_indices=column_indices,
-            entry_rebalancing_params=entry_rebalancing_params,
-            n_jobs=n_jobs,
-            cv=cv,
+            estimator, n_jobs=n_jobs, **call_kw
         ),
     )
+
 
 
 def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
@@ -842,10 +629,10 @@ def solve_compact_folds(
     reuse the OSQP / Clarabel workspace when the topology is unchanged.
     """
     engines = EngineCache(spec=spec) if engines is None else engines
-    warm_before = int(getattr(engines.engine, "n_warm_starts", 0))
     weights: dict[int, NDArray[np.float64]] = {}
-    moments_s = 0.0
-    solve_s = 0.0
+    moments_s = solve_s = 0.0
+    warm_before = 0
+    engine = None
     for i, fold in enumerate(folds):
         t0 = time.perf_counter()
         moments = session.get(fold)
@@ -854,10 +641,12 @@ def solve_compact_folds(
             int(moments.mu.size),
             int(moments.n_observations) if spec.needs_returns() else None,
         )
+        if i == 0:
+            warm_before = engine.n_warm_starts
         t1 = time.perf_counter()
         weights[fold.fold_id] = engine.solve(moments, warm=i > 0)
         solve_s += time.perf_counter() - t1
-    n_warm = int(getattr(engines.engine, "n_warm_starts", 0)) - warm_before
+    n_warm = 0 if engine is None else engine.n_warm_starts - warm_before
     return FoldBatchResult(
         weights=weights,
         moments_s=moments_s,
@@ -939,13 +728,11 @@ def closed_form_weights(
 
 
 def _segment_params(estimator) -> dict[str, Any]:
-    extra: dict[str, Any] = {}
-    own = getattr(estimator, "portfolio_params", None)
-    if own:
-        extra.update(own)
+    extra = dict(estimator.portfolio_params or {})
+    state = estimator.__dict__
     for name in _PORTFOLIO_ATTRS:
-        if name not in extra and hasattr(estimator, name):
-            extra[name] = getattr(estimator, name)
+        if name not in extra and name in state:
+            extra[name] = state[name]
     extra.pop("name", None)
     extra.pop("check_observations_order", None)
     extra.pop("fallback_chain", None)
@@ -953,13 +740,14 @@ def _segment_params(estimator) -> dict[str, Any]:
 
 
 def _train_slice(X, x_arr: np.ndarray, fold: FoldSpec):
-    """Training window, keeping DataFrame columns when ``X`` has ``iloc``."""
-    if hasattr(X, "iloc"):
+    """Training window, keeping DataFrame columns when ``X`` supports ``iloc``."""
+    try:
         rows = X.iloc[np.asarray(fold.train_idx)]
-        if fold.asset_idx is not None:
-            return rows.iloc[:, np.asarray(fold.asset_idx)]
-        return rows
-    return window_view(x_arr, fold.train_idx, fold.asset_idx)
+    except AttributeError:
+        return window_view(x_arr, fold.train_idx, fold.asset_idx)
+    if fold.asset_idx is not None:
+        return rows.iloc[:, np.asarray(fold.asset_idx)]
+    return rows
 
 
 def solve_sequential_folds(
@@ -1159,34 +947,37 @@ def _skfolio_predict(
 
 
 def _choice_reason(backend: str, capabilities: CallCapabilities) -> str:
-    if backend == "osqp":
-        return "boxed MeanRisk variance; compact OSQP"
-    if backend == "highs":
-        return "boxed MeanRisk LP; persistent HiGHS simplex"
-    if backend == "clarabel":
-        return "boxed MeanRisk scenario risk; compact Clarabel"
-    if backend == "closed-form":
-        return "closed-form weights; no solver"
-    if backend == "cvxpy-sequential":
-        if capabilities.compact_reason:
+    match backend:
+        case "osqp":
+            return "boxed MeanRisk variance; compact OSQP"
+        case "highs":
+            return "boxed MeanRisk LP; persistent HiGHS simplex"
+        case "clarabel":
+            return "boxed MeanRisk scenario risk; compact Clarabel"
+        case "closed-form":
+            return "closed-form weights; no solver"
+        case "cvxpy-sequential":
+            if capabilities.compact_reason:
+                return (
+                    f"MeanRisk outside the compact subset "
+                    f"({capabilities.compact_reason})"
+                )
+            return "Parameterized MeanRisk CVXPY reuse"
+        case "fit-assemble":
             return (
-                f"MeanRisk outside the compact subset ({capabilities.compact_reason})"
+                capabilities.sequential_reason
+                or capabilities.compact_reason
+                or "native fit; assemble from weights_"
             )
-        return "Parameterized MeanRisk CVXPY reuse"
-    if backend == "fit-assemble":
-        return (
-            capabilities.sequential_reason
-            or capabilities.compact_reason
-            or "native fit; assemble from weights_"
-        )
-    if backend == "sklearn":
-        return (
-            capabilities.assemble_reason
-            or capabilities.sequential_reason
-            or capabilities.compact_reason
-            or "unmodified skfolio"
-        )
-    return backend
+        case "sklearn":
+            return (
+                capabilities.assemble_reason
+                or capabilities.sequential_reason
+                or capabilities.compact_reason
+                or "unmodified skfolio"
+            )
+        case _:
+            return backend
 
 
 def _report_from_batch(
@@ -1213,6 +1004,64 @@ def _report_from_batch(
         eval_s=eval_s,
         wall_s=wall_s,
     )
+
+
+def _after_solve_failure(
+    *,
+    fail_reason: str,
+    capabilities: CallCapabilities,
+    estimator,
+    X,
+    y,
+    x_arr,
+    y_arr,
+    cv_plan: CVPlan,
+    fallback_cv,
+    portfolio_params,
+    n_jobs,
+    method,
+    verbose,
+    params,
+    pre_dispatch,
+    column_indices,
+    entry_rebalancing_params,
+    t_wall: float,
+) -> tuple[Any, AccelerationReport]:
+    """Native fit-assemble or skfolio fallback after a compact/sequential failure."""
+    if capabilities.can_assemble:
+        pred, merged, eval_s = _fit_assemble_prediction(
+            estimator, X, x_arr, y_arr, cv_plan, portfolio_params
+        )
+        report = _report_from_batch(
+            "fit-assemble",
+            merged,
+            eval_s=eval_s,
+            reason=_choice_reason("fit-assemble", capabilities),
+            fallback_reason=fail_reason,
+            wall_s=time.perf_counter() - t_wall,
+        )
+        return pred, report
+    pred = _skfolio_predict(
+        estimator,
+        X,
+        y,
+        fallback_cv,
+        n_jobs=n_jobs,
+        method=method,
+        verbose=verbose,
+        params=params,
+        pre_dispatch=pre_dispatch,
+        column_indices=column_indices,
+        portfolio_params=portfolio_params,
+        entry_rebalancing_params=entry_rebalancing_params,
+    )
+    report = AccelerationReport(
+        backend="sklearn",
+        reason=_choice_reason("sklearn", capabilities),
+        fallback_reason=fail_reason,
+        wall_s=time.perf_counter() - t_wall,
+    )
+    return pred, report
 
 
 def cross_val_predict(
@@ -1378,8 +1227,6 @@ def cross_val_predict(
         cv=cv,
     )
     if backend == "auto":
-        from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
         native_lp = continuation_unhelpful_reason(estimator, cv)
         if native_lp:
             warnings.warn(
@@ -1504,43 +1351,25 @@ def cross_val_predict(
                 f"compact {spec.risk_measure.name} solve failed: "
                 f"{type(error).__name__}: {error}"
             )
-            if capabilities.can_assemble:
-                pred, merged, eval_s = _fit_assemble_prediction(
-                    estimator,
-                    X,
-                    x_arr,
-                    y_arr,
-                    cv_plan,
-                    portfolio_params,
-                )
-                report = _report_from_batch(
-                    "fit-assemble",
-                    merged,
-                    eval_s=eval_s,
-                    reason=_choice_reason("fit-assemble", capabilities),
-                    fallback_reason=fail_reason,
-                    wall_s=time.perf_counter() - t_wall,
-                )
-                return (pred, report) if return_report else pred
-            pred = _skfolio_predict(
-                estimator,
-                X,
-                y,
-                fallback_cv,
+            pred, report = _after_solve_failure(
+                fail_reason=fail_reason,
+                capabilities=capabilities,
+                estimator=estimator,
+                X=X,
+                y=y,
+                x_arr=x_arr,
+                y_arr=y_arr,
+                cv_plan=cv_plan,
+                fallback_cv=fallback_cv,
+                portfolio_params=portfolio_params,
                 n_jobs=n_jobs,
                 method=method,
                 verbose=verbose,
                 params=params,
                 pre_dispatch=pre_dispatch,
                 column_indices=column_indices,
-                portfolio_params=portfolio_params,
                 entry_rebalancing_params=entry_rebalancing_params,
-            )
-            report = AccelerationReport(
-                backend="sklearn",
-                reason=_choice_reason("sklearn", capabilities),
-                fallback_reason=fail_reason,
-                wall_s=time.perf_counter() - t_wall,
+                t_wall=t_wall,
             )
             return (pred, report) if return_report else pred
 
@@ -1579,47 +1408,29 @@ def cross_val_predict(
                     for path_index, batch in enumerate(cv_plan.path_batches())
                 ]
             )
-        except Exception as error:
+        except (RuntimeError, ValueError) as error:
             fail_reason = (
                 f"cvxpy-sequential solve failed: {type(error).__name__}: {error}"
             )
-            if capabilities.can_assemble:
-                pred, merged, eval_s = _fit_assemble_prediction(
-                    estimator,
-                    X,
-                    x_arr,
-                    y_arr,
-                    cv_plan,
-                    portfolio_params,
-                )
-                report = _report_from_batch(
-                    "fit-assemble",
-                    merged,
-                    eval_s=eval_s,
-                    reason=_choice_reason("fit-assemble", capabilities),
-                    fallback_reason=fail_reason,
-                    wall_s=time.perf_counter() - t_wall,
-                )
-                return (pred, report) if return_report else pred
-            pred = _skfolio_predict(
-                estimator,
-                X,
-                y,
-                fallback_cv,
+            pred, report = _after_solve_failure(
+                fail_reason=fail_reason,
+                capabilities=capabilities,
+                estimator=estimator,
+                X=X,
+                y=y,
+                x_arr=x_arr,
+                y_arr=y_arr,
+                cv_plan=cv_plan,
+                fallback_cv=fallback_cv,
+                portfolio_params=portfolio_params,
                 n_jobs=n_jobs,
                 method=method,
                 verbose=verbose,
                 params=params,
                 pre_dispatch=pre_dispatch,
                 column_indices=column_indices,
-                portfolio_params=portfolio_params,
                 entry_rebalancing_params=entry_rebalancing_params,
-            )
-            report = AccelerationReport(
-                backend="sklearn",
-                reason=_choice_reason("sklearn", capabilities),
-                fallback_reason=fail_reason,
-                wall_s=time.perf_counter() - t_wall,
+                t_wall=t_wall,
             )
             return (pred, report) if return_report else pred
         t_eval = time.perf_counter()
@@ -1658,5 +1469,3 @@ def cross_val_predict(
     )
     return (pred, report) if return_report else pred
 
-
-massive_cross_val_predict = cross_val_predict

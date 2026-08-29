@@ -43,7 +43,7 @@ CONFIG: dict[str, Any] = {
     "n_jobs": 1,
     # Native MeanRisk default solver. Compact engines (OSQP / HiGHS / Clarabel)
     # are selected by backend="auto" and must not receive custom solver_params
-    # or they become compact-ineligible (see predict._UNSUPPORTED_IF_SET).
+    # or they become compact-ineligible (see predict._COMPACT_NONE_ATTRS).
     "solver": "CLARABEL",
     "solver_params": None,
     "l2_coef": 1e-5,

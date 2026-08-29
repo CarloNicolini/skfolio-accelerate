@@ -191,7 +191,7 @@ def test_cpcv_grid_search_matches_repeated_predict():
 def test_grid_search_rejects_options_not_in_compact_problem():
     X = synthetic_returns(48, 5, seed=20)
     cv = WalkForward(train_size=24, test_size=8)
-    with np.testing.assert_raises_regex(ValueError, "maximum variance"):
+    with np.testing.assert_raises_regex(ValueError, "max_variance"):
         grid_search(
             MeanRisk(max_variance=1.0),
             X,
