@@ -52,7 +52,10 @@ _LP_RISKS = frozenset(
         RiskMeasure.CDAR,
     }
 )
-# ADMM is a poor simplex substitute. These LPs need COSMO.jl-scale gaps.
+# ADMM is a poor simplex substitute. These LPs need COSMO.jl-scale gaps
+# and still fail or return materially different OOS paths; compact COSMO
+# via ``cross_val_predict`` refuses them. ``make_cosmo_engine`` still
+# constructs them for the persistence ablation.
 _SLOW_ADMM_RISKS = frozenset(
     {
         RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
@@ -62,6 +65,7 @@ _SLOW_ADMM_RISKS = frozenset(
         RiskMeasure.CDAR,
     }
 )
+COSMO_UNRELIABLE_LPS = _SLOW_ADMM_RISKS
 
 
 def cosmo_available() -> bool:
@@ -105,6 +109,16 @@ def default_persist_mode(spec: MeanRiskSpec) -> PersistMode:
 def uses_cosmo_solver(estimator) -> bool:
     """True when the estimator asks for COSMO rather than Clarabel/OSQP."""
     return str(getattr(estimator, "solver", "") or "").upper() in COSMO_SOLVER_NAMES
+
+
+def cosmo_cv_blocked_reason(risk: RiskMeasure) -> str | None:
+    """Why ``cross_val_predict(..., backend='cosmo')`` should refuse ``risk``."""
+    if risk in COSMO_UNRELIABLE_LPS:
+        return (
+            f"COSMO.rs ADMM is not a reliable engine for {risk.name}; "
+            "use backend='auto' (HiGHS or Clarabel)"
+        )
+    return None
 
 
 def clarabel_cones_to_cosmo(cones: list[Any]) -> list[tuple[str, int] | tuple[str]]:

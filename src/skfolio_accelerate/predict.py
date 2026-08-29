@@ -486,7 +486,10 @@ def cross_val_predict(
     if backend not in {"auto", "compact", "cvxpy-sequential", "sklearn", "cosmo"}:
         raise ValueError(f"Unknown backend {backend!r}")
     if backend == "cosmo":
-        from skfolio_accelerate._cosmo import cosmo_available
+        from skfolio_accelerate._cosmo import (
+            cosmo_available,
+            cosmo_cv_blocked_reason,
+        )
 
         if not cosmo_available():
             raise ImportError(
@@ -494,6 +497,9 @@ def cross_val_predict(
                 "skfolio-accelerate[cosmo] or build "
                 "https://github.com/CarloNicolini/COSMO.rs with maturin."
             )
+        risk = getattr(estimator, "risk_measure", None)
+        if reason := cosmo_cv_blocked_reason(risk):
+            raise ValueError(reason)
 
     capabilities = classify_call(
         estimator,

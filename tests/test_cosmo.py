@@ -157,6 +157,18 @@ def test_solver_cosmo_selects_cosmo_backend():
     assert report.backend == "cosmo"
 
 
+def test_cosmo_backend_refuses_unreliable_drawdown_lp():
+    X = synthetic_returns(72, 5, seed=108)
+    cv = WalkForward(train_size=36, test_size=12)
+    with pytest.raises(ValueError, match="not a reliable engine"):
+        cross_val_predict(
+            MeanRisk(risk_measure=RiskMeasure.MAX_DRAWDOWN),
+            X,
+            cv=cv,
+            backend="cosmo",
+        )
+
+
 @pytest.mark.parametrize(
     "mode",
     ["cold", "warm_x", "warm_xy", "persist_factor", "persist_full"],

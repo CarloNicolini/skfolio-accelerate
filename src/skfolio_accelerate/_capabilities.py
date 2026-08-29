@@ -216,10 +216,15 @@ def _mean_risk_compact_blocked(estimator: MeanRisk) -> str | None:
         return "risk_measure is not compacted"
     solver_name = str(estimator.solver or "")
     if solver_name.upper() in {"COSMO", "COSMO_RS", "COSMO_RUST"}:
-        from skfolio_accelerate._cosmo import cosmo_available
+        from skfolio_accelerate._cosmo import (
+            cosmo_available,
+            cosmo_cv_blocked_reason,
+        )
 
         if not cosmo_available():
             return "COSMO.rs is not installed"
+        if reason := cosmo_cv_blocked_reason(risk):
+            return reason
     else:
         allowed = {"CLARABEL", "OSQP"} if risk is RiskMeasure.VARIANCE else {"CLARABEL"}
         if estimator.solver not in allowed:

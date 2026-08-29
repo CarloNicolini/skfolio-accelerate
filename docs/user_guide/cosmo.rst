@@ -19,7 +19,10 @@ workspace across WalkForward folds of boxed MeanRisk.
 It does **not** replace Clarabel. On boxed variance OSQP already updates
 ``P`` and warm-starts; on boxed LPs HiGHS already reuses a simplex basis.
 COSMO is interesting only where those engines do not apply, or as a
-controlled ablation of ADMM state reuse.
+controlled ablation of ADMM state reuse. ``cross_val_predict`` refuses
+MAD / FLPM / max-drawdown / average-drawdown / CDaR: ADMM is not a
+reliable LP engine there (measured Sharpe errors vs Clarabel). Use
+``make_cosmo_engine`` only for the persistence ablation.
 
 Enabling the backend
 ********************

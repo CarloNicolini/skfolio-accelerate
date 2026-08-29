@@ -185,10 +185,10 @@ These are **not** `run_relative.py` PR-vs-main numbers.
 
 | Risk | Native (s) | COSMO persist (s) | Δ% vs native | Sharpe \|Δ\| |
 | --- | ---: | ---: | ---: | ---: |
-| VARIANCE | 0.041 | 0.001 | −97% | 6e-6 |
-| SEMI_DEVIATION | 0.041 | 0.014 | −66% | 4e-7 |
-| CVAR | 0.038 | 0.056 | **+47%** | 6e-7 |
-| MAX_DRAWDOWN | 0.035 | 0.045 | **+29%** | 2.4e-3 |
+| VARIANCE | 0.033 | 0.001 | −97% | 6e-6 |
+| SEMI_DEVIATION | 0.035 | 0.016 | −54% | 6e-7 |
+| CVAR | 0.035 | 0.055 | **+57%** | 2e-6 |
+| MAX_DRAWDOWN | 0.035 | *refused* | — | persist_factor Sharpe \|Δ\| ≈ **0.17** (see §23) |
 
 COSMO vs native on variance is real but **smaller than auto-vs-native**,
 and is the compact-engine effect, not a COSMO-specific miracle.
@@ -198,9 +198,9 @@ and is the compact-engine effect, not a COSMO-specific miracle.
 | Risk | auto (s, engine) | COSMO (s) | COSMO vs auto |
 | --- | ---: | ---: | ---: |
 | VARIANCE | 0.002 OSQP | 0.001 | comparable (noise at 1 ms) |
-| SEMI_DEVIATION | 0.005 Clarabel | 0.014 | COSMO **slower** |
-| CVAR (`l2=1e-5` → Clarabel not HiGHS) | 0.002 | 0.056 | COSMO **much slower** |
-| MAX_DRAWDOWN | 0.003 Clarabel | 0.045 | COSMO **much slower** |
+| SEMI_DEVIATION | 0.004 Clarabel | 0.016 | COSMO **slower** |
+| CVAR (`l2=1e-5` → Clarabel not HiGHS) | 0.002 | 0.055 | COSMO **much slower** |
+| MAX_DRAWDOWN | 0.003 Clarabel | refused on CV path | auto wins |
 
 ## 13. Speedup versus cold-start COSMO
 
@@ -214,10 +214,12 @@ Boxed **variance** (class C). That is already OSQP’s home turf.
 
 ## 15. Which benefit least?
 
-CVaR and drawdown LPs. ADMM is a poor simplex substitute; HiGHS already
-wins on `l2_coef=0` boxed LPs. EVaR/CDaR may fail to converge at
-Clarabel-style `1e-8`; the compact COSMO settings use `1e-5` and disable
-Anderson on the slow LP family.
+CVaR (slower than Clarabel) and drawdown LPs. ADMM is a poor simplex
+substitute; HiGHS already wins on `l2_coef=0` boxed LPs.
+`cross_val_predict(..., backend="cosmo")` **refuses** MAD, FLPM, max
+drawdown, average drawdown, and CDaR. EVaR may fail to converge; tests
+skip. Compact COSMO settings use `1e-5` and disable Anderson on that LP
+family when `make_cosmo_engine` is used for ablations.
 
 ## 16. Long walk-forward sequences?
 
@@ -228,10 +230,12 @@ would still have to beat OSQP, which already warm-starts and updates `P`.
 ## 17. Rolling vs expanding windows
 
 Driver cells `walk-forward-rolling` and `walk-forward-expanding` use
-`WalkForward(..., expand_train=True)` for expanding. Expanding scenario
-risks are class **E** (growing `T`); the COSMO workspace is discarded when
-`n_observations` changes. Variance stays class **C**. Numbers: rerun
-`benchmark/run_cosmo.py`.
+`WalkForward(..., expand_train=True)` for expanding. **Measured** on the
+quick variance panel: rolling native 0.033 s / auto 0.002 s / COSMO
+0.001 s; expanding native 0.033 s / auto 0.001 s / COSMO 0.001 s.
+Sharpe \|Δ\| vs native remains ~6e-6 (rolling) and ~4e-5 (expanding).
+Variance stays class **C** when `n` is fixed. Expanding scenario risks
+are class **E**.
 
 ## 18. MultipleRandomizedCV?
 
@@ -251,15 +255,11 @@ issue.
 ## 20. Parallelism (`n_jobs`) vs state reuse
 
 Amortized backends already require `n_jobs in {None, 1}`. Persistent COSMO
-is sequential per trajectory. Driver cells `native-n_jobs=1` and
-`native-n_jobs=2` time native WalkForward. Break-even: if parallel native
-wall-clock on `F` folds is `T_native / min(F, workers)` plus overhead, a
-sequential persistent COSMO trajectory must be faster than that **and**
-faster than sequential auto. On the 4-fold toy panel, auto sequential
-already beats native; adding COSMO state does not change the parallel
-story. **Hypothesis (unmeasured at scale):** many-core native Clarabel
-could beat sequential persistent COSMO even if per-fold COSMO were
-faster—because auto is already faster per fold.
+is sequential per trajectory. **Measured** on the 4-fold variance panel:
+native `n_jobs=1` 0.033 s, native `n_jobs=2` 0.022 s, sequential auto
+0.002 s, sequential COSMO 0.001 s. Parallel native does not catch
+sequential compact OSQP/COSMO on this toy `F`. Break-even versus auto
+would require COSMO to beat OSQP, which it does not on a 1 ms QP.
 
 ## 21. Break-even sequential stateful vs parallel cold
 
@@ -269,23 +269,28 @@ native `n_jobs=-1`.
 
 ## 22. Numerical differences versus Clarabel / OSQP
 
-Tests allow `atol=5e-3` weights ( `2e-2` for slow LPs). Quick-panel Sharpe
-errors vs native: ~1e-6 for variance / semi-deviation / CVaR; ~2e-3 for
-max drawdown (COSMO ADMM gap vs IPM). Not bitwise equality. Feasibility:
-budget and bounds checked in tests.
+Tests allow `atol=5e-3` weights (`2e-2` for slow LPs on single-window
+cold solves). Quick-panel Sharpe errors vs native: ~1e-6 for variance /
+semi-deviation / CVaR. Max-drawdown **persist_factor** CV paths differed
+by Sharpe \|Δ\| ≈ 0.17; that configuration is refused on
+`cross_val_predict`. Not bitwise equality. Feasibility: budget and bounds
+checked in unit tests.
 
 ## 23. Failure modes
 
 * CDaR / some utility drawdowns / EVaR: COSMO.rs may hit `max_iter`
   (tests skip).
-* Tight `1e-8` on LPs: routinely exhausts iterations; settings use `1e-5`
-  for the slow LP family. Tolerances are **documented and different** from
-  Clarabel defaults.
-* `persist_full` on MAX_DRAWDOWN reported mean 7 iterations and success
-  after cold failed on the same windows. Treat that as a **stale-state
-  false solve**, not a speedup. Default scenario persist mode is therefore
-  `persist_factor` (drop ADMM iterates; do not carry a possibly infeasible
-  warm start). Restart policy `status` rebuilds on non-Solved.
+* Tight `1e-8` on LPs: routinely exhausts iterations; ablation settings
+  use `1e-5` for the slow LP family. Tolerances are **documented and
+  different** from Clarabel defaults.
+* `persist_full` on MAX_DRAWDOWN reported mean 7 iterations after cold
+  failed (`Max_iter_reached` at 25000). Treat as a **stale-state false
+  solve**. `persist_factor` “solved” with Sharpe \|Δ\| ≈ 0.17 vs native
+  on `cross_val_predict`. Those LPs are now **refused** on the CV entry
+  point; `make_cosmo_engine` still builds them for ablations.
+* Compact COSMO solver share of (moments + solve): variance 68%,
+  SEMI_DEVIATION 98%, CVAR 100%, MAX_DRAWDOWN 100%. Moments are not the
+  bottleneck on this panel.
 * GitHub Python API without `update_p`: persist modes reconstruct (warning).
 
 ## 24. Restart policies
@@ -326,12 +331,15 @@ sequential CVXPY → assemble → sklearn.
 
 ## Environment (quick run that produced the tables above)
 
-* skfolio-accelerate base SHA before this branch: `d42f946`
+* skfolio-accelerate SHA `6607d3d` (this branch); results in
+  `benchmark/results/cosmo/2026-08-29_6607d3d/`
 * skfolio 1.0.1
 * Python 3.12.3
 * clarabel 0.11.1, osqp 1.1.3, highspy 1.15.1, numpy 2.5.2, cosmo-rs 0.1.0
-  (local `/tmp/COSMO.rs` maturin build)
-* cvxpy-base (no full `cvxpy` extra)
+  (local `/tmp/COSMO.rs` maturin build with Python `update_p` / `update_a` /
+  `reset`)
+* cvxpy-base 1.9.2
+* rustc 1.83.0
 * Panel: 80 observations × 6 assets, train=40, test=10, 4 folds, `--quick`
 * Workers: 1
 
