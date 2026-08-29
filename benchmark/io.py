@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +25,7 @@ SUMMARY_COLUMNS = [
 
 
 def run_directory(root: Path, git_sha_short: str | None) -> Path:
-    day = datetime.now(UTC).strftime("%Y-%m-%d")
+    day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sha = git_sha_short or "unknown"
     base = root / f"{day}_{sha}"
     path = base

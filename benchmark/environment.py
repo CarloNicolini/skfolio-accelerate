@@ -6,7 +6,7 @@ import os
 import platform
 import subprocess
 import sys
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any
 
@@ -113,7 +113,7 @@ def collect_environment(config: BenchmarkConfig) -> dict[str, Any]:
     }
     return {
         "schema_version": SCHEMA_VERSION,
-        "timestamp": datetime.now(UTC).isoformat(),
+        "timestamp": datetime.now(timezone.utc).isoformat(),
         **git,
         "python": sys.version,
         "python_version": platform.python_version(),
