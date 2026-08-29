@@ -57,6 +57,10 @@ from skfolio_accelerate.moments import (
     is_default_empirical,
     path_moment_session,
 )
+from skfolio_accelerate.linear_lp import (
+    continuation_unhelpful_reason,
+    is_highs_lp_risk,
+)
 from skfolio_accelerate.scoring import assemble_prediction, window_view
 
 BackendName = Literal[
@@ -299,16 +303,15 @@ def _compact_backend_name(estimator) -> BackendName:
         return "closed-form"
     if estimator.risk_measure is RiskMeasure.VARIANCE:
         return "osqp"
-    from skfolio_accelerate.linear_lp import is_highs_lp_risk
-
     if is_highs_lp_risk(estimator_spec(estimator)):
         return "highs"
     return "clarabel"
 
 
 def _first_set_attr(obj, attrs: tuple[str, ...]) -> str | None:
+    state = obj.__dict__
     for name in attrs:
-        if getattr(obj, name) is not None:
+        if state[name] is not None:
             return name
     return None
 
@@ -344,9 +347,9 @@ def _mean_risk_compact_blocked(estimator: MeanRisk) -> str | None:
         return f"solver {estimator.solver!r} is not compacted for {risk.name}"
     if _nonzero(estimator.l1_coef):
         return "l1_coef is not compacted"
-    if isinstance(estimator.min_weights, dict) or isinstance(estimator.max_weights, dict):
+    if type(estimator.min_weights) is dict or type(estimator.max_weights) is dict:
         return "dict weight bounds are not compacted"
-    if isinstance(estimator.min_acceptable_return, dict):
+    if type(estimator.min_acceptable_return) is dict:
         return "dict minimum acceptable returns are not compacted"
     if _nonzero(estimator.transaction_costs):
         return "transaction costs are not compacted"
@@ -374,13 +377,15 @@ def blocked_reason(estimator) -> str | None:
     --------
     compact_blocked_reason, assemble_blocked_reason, classify_call
     """
-    if isinstance(estimator, Pipeline):
-        return "pipelines use skfolio cross_val_predict"
-    if type(estimator) in _CLOSED_FORM_TYPES:
-        return _closed_form_blocked(estimator)
-    if not isinstance(estimator, MeanRisk):
-        return f"estimator {type(estimator).__name__} is not MeanRisk"
-    return _mean_risk_compact_blocked(estimator)
+    match estimator:
+        case Pipeline():
+            return "pipelines use skfolio cross_val_predict"
+        case EqualWeighted() | InverseVolatility() | Random():
+            return _closed_form_blocked(estimator)
+        case MeanRisk():
+            return _mean_risk_compact_blocked(estimator)
+        case _:
+            return f"estimator {type(estimator).__name__} is not MeanRisk"
 
 
 def _call_options_blocked(
@@ -404,8 +409,11 @@ def _call_options_blocked(
         return "entry_rebalancing_params uses skfolio cross_val_predict"
     if n_jobs is not ... and n_jobs not in (None, 1):
         return "n_jobs!=1 uses skfolio cross_val_predict"
-    if getattr(cv, "shuffle", False) is True:
-        return "shuffled CV uses skfolio cross_val_predict"
+    try:
+        if cv.shuffle is True:
+            return "shuffled CV uses skfolio cross_val_predict"
+    except AttributeError:
+        pass
     return None
 
 
@@ -430,8 +438,6 @@ def compact_blocked_reason(
         verb="compacted",
     ):
         return reason
-    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
     return continuation_unhelpful_reason(estimator, cv) or blocked_reason(estimator)
 
 
@@ -456,29 +462,22 @@ def assemble_blocked_reason(
         verb="assembled from weights",
     ):
         return reason
-    if isinstance(estimator, Pipeline):
-        return "pipelines use skfolio cross_val_predict"
-    if not isinstance(estimator, BaseOptimization):
-        return f"estimator {type(estimator).__name__} is not a portfolio optimizer"
-    if estimator.needs_previous_weights:
-        return "sequential previous_weights (costs, turnover, or fallback)"
-    if estimator.raise_on_failure is not True:
-        return "raise_on_failure=False uses skfolio cross_val_predict"
-    if getattr(estimator, "efficient_frontier_size", None) is not None:
-        return "efficient_frontier_size uses skfolio cross_val_predict"
-    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
-    return continuation_unhelpful_reason(estimator, cv)
-
-
-_SEQUENTIAL_ATTR_REASONS = {
-    "add_constraints": "add_constraints uses fit-assemble",
-    "add_objective": "add_objective uses fit-assemble",
-    "overwrite_expected_return": "overwrite_expected_return uses fit-assemble",
-    "mu_uncertainty_set_estimator": "mu uncertainty sets use fit-assemble",
-    "covariance_uncertainty_set_estimator": "covariance uncertainty sets use fit-assemble",
-    "max_tracking_error": "tracking error is not parameterized",
-}
+    match estimator:
+        case Pipeline():
+            return "pipelines use skfolio cross_val_predict"
+        case BaseOptimization():
+            if estimator.needs_previous_weights:
+                return "sequential previous_weights (costs, turnover, or fallback)"
+            if estimator.raise_on_failure is not True:
+                return "raise_on_failure=False uses skfolio cross_val_predict"
+            if (
+                type(estimator) in {MeanRisk, ParametricMeanRisk}
+                and estimator.efficient_frontier_size is not None
+            ):
+                return "efficient_frontier_size uses skfolio cross_val_predict"
+            return continuation_unhelpful_reason(estimator, cv)
+        case _:
+            return f"estimator {type(estimator).__name__} is not a portfolio optimizer"
 
 
 def sequential_blocked_reason(
@@ -507,13 +506,20 @@ def sequential_blocked_reason(
         return f"estimator {type(estimator).__name__} is not MeanRisk"
     if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RATIO:
         return "MAXIMIZE_RATIO homogenization is not parameterized"
-    for attr, msg in _SEQUENTIAL_ATTR_REASONS.items():
-        if getattr(estimator, attr) is not None:
-            return msg
+    if estimator.add_constraints is not None:
+        return "add_constraints uses fit-assemble"
+    if estimator.add_objective is not None:
+        return "add_objective uses fit-assemble"
+    if estimator.overwrite_expected_return is not None:
+        return "overwrite_expected_return uses fit-assemble"
+    if estimator.mu_uncertainty_set_estimator is not None:
+        return "mu uncertainty sets use fit-assemble"
+    if estimator.covariance_uncertainty_set_estimator is not None:
+        return "covariance uncertainty sets use fit-assemble"
+    if estimator.max_tracking_error is not None:
+        return "tracking error is not parameterized"
     if estimator.fallback not in (None, "previous_weights"):
         return "fallback estimator uses skfolio cross_val_predict"
-    from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
     return continuation_unhelpful_reason(estimator, cv)
 
 
@@ -723,9 +729,10 @@ def closed_form_weights(
 
 def _segment_params(estimator) -> dict[str, Any]:
     extra = dict(estimator.portfolio_params or {})
+    state = estimator.__dict__
     for name in _PORTFOLIO_ATTRS:
-        if name not in extra and hasattr(estimator, name):
-            extra[name] = getattr(estimator, name)
+        if name not in extra and name in state:
+            extra[name] = state[name]
     extra.pop("name", None)
     extra.pop("check_observations_order", None)
     extra.pop("fallback_chain", None)
@@ -733,13 +740,14 @@ def _segment_params(estimator) -> dict[str, Any]:
 
 
 def _train_slice(X, x_arr: np.ndarray, fold: FoldSpec):
-    """Training window, keeping DataFrame columns when ``X`` has ``iloc``."""
-    if hasattr(X, "iloc"):
+    """Training window, keeping DataFrame columns when ``X`` supports ``iloc``."""
+    try:
         rows = X.iloc[np.asarray(fold.train_idx)]
-        if fold.asset_idx is not None:
-            return rows.iloc[:, np.asarray(fold.asset_idx)]
-        return rows
-    return window_view(x_arr, fold.train_idx, fold.asset_idx)
+    except AttributeError:
+        return window_view(x_arr, fold.train_idx, fold.asset_idx)
+    if fold.asset_idx is not None:
+        return rows.iloc[:, np.asarray(fold.asset_idx)]
+    return rows
 
 
 def solve_sequential_folds(
@@ -1219,8 +1227,6 @@ def cross_val_predict(
         cv=cv,
     )
     if backend == "auto":
-        from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
-
         native_lp = continuation_unhelpful_reason(estimator, cv)
         if native_lp:
             warnings.warn(
@@ -1402,7 +1408,7 @@ def cross_val_predict(
                     for path_index, batch in enumerate(cv_plan.path_batches())
                 ]
             )
-        except Exception as error:
+        except (RuntimeError, ValueError) as error:
             fail_reason = (
                 f"cvxpy-sequential solve failed: {type(error).__name__}: {error}"
             )
