@@ -153,6 +153,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     x_arr = np.ascontiguousarray(X, dtype=np.float64)
     cv_plan = compile_cv_plan(cv, X, y)
     keep_returns = any(spec.needs_returns() for spec in specs)
+    keep_covariance = any(not spec.needs_returns() for spec in specs)
 
     weights: list[dict[int, np.ndarray]] = [dict() for _ in specs]
     engines = [EngineCache(spec=spec) for spec in specs]
@@ -173,6 +174,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
             x_arr,
             folds,
             keep_returns=keep_returns,
+            keep_covariance=keep_covariance,
             fold_blocks=cv_plan.fold_blocks,
         )
         warm_before = [

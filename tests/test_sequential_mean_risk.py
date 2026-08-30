@@ -9,6 +9,7 @@ from skfolio import RiskMeasure
 from skfolio.model_selection import WalkForward
 from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
 from skfolio.optimization import MeanRisk, ObjectiveFunction
+from skfolio.prior import EmpiricalPrior
 from sklearn.model_selection import TimeSeriesSplit
 
 from skfolio_accelerate import cross_val_predict, path_sharpes
@@ -98,6 +99,32 @@ def test_fixed_window_cvar_reuses_one_problem():
     assert report.backend == "cvxpy-sequential"
     assert report.n_rebuilds == 1
     assert report.n_warm_starts >= 1
+
+
+def test_fixed_window_default_prior_is_only_fitted_once(monkeypatch):
+    calls = 0
+    original = EmpiricalPrior.fit
+
+    def counted_fit(self, X, y=None, **fit_params):
+        nonlocal calls
+        calls += 1
+        return original(self, X, y, **fit_params)
+
+    monkeypatch.setattr(EmpiricalPrior, "fit", counted_fit)
+    X = synthetic_returns(84, 5, seed=4)
+    estimator = MeanRisk(min_return=1e-5, l2_coef=1e-5)
+    _, report = cross_val_predict(
+        estimator,
+        X,
+        cv=_walk_forward(),
+        n_jobs=1,
+        return_report=True,
+    )
+
+    assert report.backend == "cvxpy-sequential"
+    assert report.n_rebuilds == 1
+    assert report.n_warm_starts >= 1
+    assert calls == 1
 
 
 def test_expanding_window_rebuilds_when_T_changes():

@@ -187,7 +187,11 @@ class MeanRiskSpec:
 
     def needs_returns(self) -> bool:
         """``True`` when the risk measure consumes scenario returns."""
-        return self.risk_measure is not RiskMeasure.VARIANCE
+        return (
+            self.objective is not ObjectiveFunction.MAXIMIZE_RETURN
+            and self.risk_measure
+            not in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION}
+        )
 
 
 class CompactEngine(Protocol):
@@ -207,6 +211,66 @@ class CompactEngine(Protocol):
             When ``True``, reuse the previous primal/dual iterate if available.
         """
         ...
+
+
+class MaxReturnBox:
+    """Analytic maximum-return portfolio with budget, bounds, and L2 penalty."""
+
+    def __init__(self, spec: MeanRiskSpec, n_assets: int) -> None:
+        self.n_assets = int(n_assets)
+        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.budget = float(spec.budget)
+        self.l2 = float(spec.l2_coef)
+        self.n_warm_starts = 0
+
+    def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
+        """Maximize ``mu @ w - l2 * ||w||²`` under box and budget constraints."""
+        del warm
+        mu = np.asarray(moments.mu, dtype=np.float64)
+        if mu.shape != (self.n_assets,):
+            raise ValueError(f"expected return shape {mu.shape} != {(self.n_assets,)}")
+        min_budget = float(self.min_w.sum())
+        max_budget = float(self.max_w.sum())
+        tolerance = 1e-12 * max(1.0, abs(self.budget))
+        if self.budget < min_budget - tolerance or self.budget > max_budget + tolerance:
+            raise ValueError("budget is infeasible for the weight bounds")
+
+        weights = self.min_w.copy()
+        if self.l2 == 0.0:
+            remaining = self.budget - min_budget
+            for index in np.argsort(-mu, kind="stable"):
+                addition = min(remaining, self.max_w[index] - self.min_w[index])
+                weights[index] += addition
+                remaining -= addition
+                if remaining <= tolerance:
+                    break
+            return weights
+
+        lower = float(np.min(mu - 2.0 * self.l2 * self.max_w))
+        upper = float(np.max(mu - 2.0 * self.l2 * self.min_w))
+        for _ in range(64):
+            multiplier = 0.5 * (lower + upper)
+            weights = np.clip(
+                (mu - multiplier) / (2.0 * self.l2),
+                self.min_w,
+                self.max_w,
+            )
+            if float(weights.sum()) > self.budget:
+                lower = multiplier
+            else:
+                upper = multiplier
+
+        residual = self.budget - float(weights.sum())
+        if abs(residual) > tolerance:
+            movable = np.flatnonzero(
+                weights < self.max_w - tolerance
+                if residual > 0
+                else weights > self.min_w + tolerance
+            )
+            if movable.size:
+                weights[movable[0]] += residual
+        return weights
 
 
 def estimator_spec(estimator) -> MeanRiskSpec:
@@ -348,6 +412,112 @@ class MinVarianceOSQP:
         self._x = np.asarray(result.x, dtype=np.float64)
         self._y = np.asarray(result.y, dtype=np.float64)
         return self._x.copy()
+
+
+class StandardDeviationClarabel:
+    """Boxed standard-deviation SOCP with persistent Clarabel topology."""
+
+    def __init__(self, spec: MeanRiskSpec, n_assets: int) -> None:
+        self.n_assets = int(n_assets)
+        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.budget = float(spec.budget)
+        self.l2 = float(spec.l2_coef)
+        self.objective = spec.objective
+        self.risk_aversion = float(spec.risk_aversion)
+        self.solver: clarabel.DefaultSolver | None = None
+        self.n_warm_starts = 0
+        self._build_pattern()
+
+    def _build_pattern(self) -> None:
+        n = self.n_assets
+        risk_variable = n
+        soc_start = 1 + 2 * n
+        n_variables = n + 1
+        n_constraints = soc_start + n + 1
+        data: list[float] = []
+        rows: list[int] = []
+        cols: list[int] = []
+
+        def put(row: int, col: int, value: float) -> None:
+            rows.append(row)
+            cols.append(col)
+            data.append(value)
+
+        for column in range(n):
+            put(0, column, 1.0)
+            put(1 + column, column, -1.0)
+            put(1 + n + column, column, 1.0)
+            for component in range(n):
+                put(soc_start + 1 + component, column, 0.0)
+        put(soc_start, risk_variable, -1.0)
+
+        self._A = sp.csc_matrix(
+            (np.asarray(data, dtype=np.float64), (rows, cols)),
+            shape=(n_constraints, n_variables),
+        )
+        self._A.sum_duplicates()
+        self._A.sort_indices()
+        self._factor_slices: list[slice] = []
+        for column in range(n):
+            stop = int(self._A.indptr[column + 1])
+            self._factor_slices.append(slice(stop - n, stop))
+
+        self._q = np.zeros(n_variables, dtype=np.float64)
+        self._q[risk_variable] = (
+            self.risk_aversion
+            if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY
+            else 1.0
+        )
+        self._b = np.zeros(n_constraints, dtype=np.float64)
+        self._b[0] = self.budget
+        self._b[1 : 1 + n] = -self.min_w
+        self._b[1 + n : 1 + 2 * n] = self.max_w
+        self._P = sp.diags(
+            np.concatenate([np.full(n, 2.0 * self.l2, dtype=np.float64), np.zeros(1)]),
+            format="csc",
+        )
+        self._cones: list[Any] = [
+            clarabel.ZeroConeT(1),
+            clarabel.NonnegativeConeT(2 * n),
+            clarabel.SecondOrderConeT(n + 1),
+        ]
+
+    def _bind_factor(self, covariance: NDArray[np.float64]) -> None:
+        covariance = np.asarray(covariance, dtype=np.float64)
+        expected = (self.n_assets, self.n_assets)
+        if covariance.shape != expected:
+            raise ValueError(f"covariance shape {covariance.shape} != {expected}")
+        try:
+            factor = np.linalg.cholesky(covariance)
+        except np.linalg.LinAlgError:
+            values, vectors = np.linalg.eigh(0.5 * (covariance + covariance.T))
+            floor = np.finfo(np.float64).eps * max(1.0, float(values[-1]))
+            factor = vectors * np.sqrt(np.maximum(values, floor))
+        for column, target in enumerate(self._factor_slices):
+            self._A.data[target] = -factor[column]
+
+    def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
+        """Solve one standard-deviation fold after rebinding its factor."""
+        self._bind_factor(moments.covariance)
+        if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
+            self._q[: self.n_assets] = -np.asarray(moments.mu, dtype=np.float64)
+        self.solver, updated = _clarabel_try_update(
+            self.solver,
+            self._P,
+            self._q,
+            self._A,
+            self._b,
+            self._cones,
+            update={"q": self._q, "A": self._A},
+        )
+        if updated and warm:
+            self.n_warm_starts += 1
+        solution = self.solver.solve()
+        status = str(solution.status).lower()
+        if "solved" not in status:
+            raise RuntimeError(f"Clarabel standard deviation failed: {solution.status}")
+        return np.asarray(solution.x[: self.n_assets], dtype=np.float64)
 
 
 class CVaRClarabel:
@@ -570,6 +740,12 @@ class ScenarioClarabel:
         self.objective = spec.objective
         self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
+        self._P: sp.csc_matrix | None = None
+        self._q: NDArray[np.float64] | None = None
+        self._A: sp.csc_matrix | None = None
+        self._b: NDArray[np.float64] | None = None
+        self._cones: list[Any] | None = None
+        self._scenario_slots: NDArray[np.intp] | None = None
         self.n_warm_starts = 0
 
     def _risk_scale(self) -> float:
@@ -901,14 +1077,73 @@ class ScenarioClarabel:
             return self._exponential_problem(moments, drawdown=False)
         return self._linear_problem(moments)
 
+    def _scenario_binding(
+        self, moments: FoldMoments
+    ) -> tuple[NDArray[np.intp], NDArray[np.float64]]:
+        risk = self.spec.risk_measure
+        n = self.n_assets
+        t = self.n_observations
+        if risk in {
+            RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+            RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        }:
+            rows = 1 + 2 * n + t + np.arange(t, dtype=np.intp)
+            values = -_scenario_deviations(moments, self.spec.min_acceptable_return)
+        elif risk is RiskMeasure.WORST_REALIZATION:
+            rows = 1 + 2 * n + np.arange(t, dtype=np.intp)
+            values = -np.asarray(moments.returns, dtype=np.float64)
+        elif risk in {RiskMeasure.SEMI_VARIANCE, RiskMeasure.SEMI_DEVIATION}:
+            rows = 1 + 2 * n + 2 * np.arange(t, dtype=np.intp) + 1
+            values = -_scenario_deviations(moments, self.spec.min_acceptable_return)
+        elif risk is RiskMeasure.EVAR:
+            rows = 2 + 2 * n + 3 * np.arange(t, dtype=np.intp)
+            values = np.asarray(moments.returns, dtype=np.float64)
+        else:
+            rows = 2 + 2 * n + 2 * np.arange(t, dtype=np.intp) + 1
+            values = -np.asarray(moments.returns, dtype=np.float64)
+        return rows, values
+
+    def _compile(self, moments: FoldMoments) -> None:
+        self._P, self._q, self._A, self._b, self._cones = self._problem(moments)
+        rows, _ = self._scenario_binding(moments)
+        slots = np.empty((self.n_observations, self.n_assets), dtype=np.intp)
+        for column in range(self.n_assets):
+            start = int(self._A.indptr[column])
+            stop = int(self._A.indptr[column + 1])
+            column_rows = self._A.indices[start:stop]
+            positions = np.searchsorted(column_rows, rows)
+            if np.any(positions == column_rows.size) or np.any(
+                column_rows[positions] != rows
+            ):
+                raise RuntimeError("ScenarioClarabel sparse pattern is incomplete")
+            slots[:, column] = start + positions
+        self._scenario_slots = slots
+
+    def _bind(self, moments: FoldMoments) -> None:
+        if self._A is None:
+            self._compile(moments)
+        rows, values = self._scenario_binding(moments)
+        del rows
+        self._A.data[self._scenario_slots] = values
+        self._q[: self.n_assets] = 0.0
+        self._weight_objective(self._q, moments)
+
     def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
         t = int(moments.n_observations)
         if t != self.n_observations:
             self.n_observations = t
             self.solver = None
-        P, q, A, b, cones = self._problem(moments)
+            self._P = self._q = self._A = self._b = self._cones = None
+            self._scenario_slots = None
+        self._bind(moments)
         self.solver, updated = _clarabel_try_update(
-            self.solver, P, q, A, b, cones, update={"q": q, "A": A, "b": b}
+            self.solver,
+            self._P,
+            self._q,
+            self._A,
+            self._b,
+            self._cones,
+            update={"q": self._q, "A": self._A},
         )
         if updated and warm:
             self.n_warm_starts += 1
@@ -951,8 +1186,12 @@ def make_compact_engine(
         a scenario risk.
     """
     risk = spec.risk_measure
+    if spec.objective is ObjectiveFunction.MAXIMIZE_RETURN:
+        return MaxReturnBox(spec, n_assets)
     if risk is RiskMeasure.VARIANCE:
         return MinVarianceOSQP(spec, n_assets)
+    if risk is RiskMeasure.STANDARD_DEVIATION:
+        return StandardDeviationClarabel(spec, n_assets)
     if risk not in _SCENARIO_RISKS:
         raise ValueError(f"Unsupported risk_measure {risk}")
     if n_observations is None:

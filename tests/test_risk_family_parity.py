@@ -24,6 +24,7 @@ from tests.helpers import synthetic_returns
 
 COMPACT_RISKS = {
     RiskMeasure.VARIANCE,
+    RiskMeasure.STANDARD_DEVIATION,
     RiskMeasure.SEMI_VARIANCE,
     RiskMeasure.SEMI_DEVIATION,
     RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
@@ -145,16 +146,21 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
     reference = estimator.fit(X).weights_
     moments = empirical_from_window(
         np.asarray(X, dtype=np.float64),
-        keep_returns=risk_measure is not RiskMeasure.VARIANCE,
+        keep_returns=risk_measure
+        not in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION},
     )
     engine = make_compact_engine(
         estimator_spec(estimator),
         n_assets=X.shape[1],
-        n_observations=(None if risk_measure is RiskMeasure.VARIANCE else X.shape[0]),
+        n_observations=(
+            None
+            if risk_measure in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION}
+            else X.shape[0]
+        ),
     )
     observed = engine.solve(moments, warm=False)
 
-    if risk_measure is RiskMeasure.VARIANCE:
+    if risk_measure in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION}:
         tolerance = 5e-4
     elif risk_measure in {RiskMeasure.EVAR, RiskMeasure.EDAR}:
         tolerance = 2e-4
@@ -164,6 +170,93 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
     assert observed.sum() == pytest.approx(1.0, abs=2e-7)
     assert np.min(observed) >= 0.05 - 2e-7
     assert np.max(observed) <= 0.6 + 2e-7
+
+
+@pytest.mark.parametrize(
+    "risk_measure",
+    [
+        RiskMeasure.SEMI_VARIANCE,
+        RiskMeasure.SEMI_DEVIATION,
+        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        RiskMeasure.WORST_REALIZATION,
+        RiskMeasure.EVAR,
+        RiskMeasure.MAX_DRAWDOWN,
+        RiskMeasure.AVERAGE_DRAWDOWN,
+        RiskMeasure.CDAR,
+        RiskMeasure.EDAR,
+    ],
+)
+def test_scenario_clarabel_reuses_compiled_sparse_pattern(monkeypatch, risk_measure):
+    first = synthetic_returns(80, 5, seed=96)
+    second = synthetic_returns(80, 5, seed=97)
+    estimator = MeanRisk(risk_measure=risk_measure, l2_coef=1e-5)
+    engine = make_compact_engine(
+        estimator_spec(estimator),
+        n_assets=first.shape[1],
+        n_observations=first.shape[0],
+    )
+    engine.solve(empirical_from_window(first, keep_returns=True), warm=False)
+    matrix_id = id(engine._A)
+    data_id = id(engine._A.data)
+
+    monkeypatch.setattr(
+        engine,
+        "_problem",
+        lambda moments: pytest.fail("sparse problem was rebuilt"),
+    )
+    observed = engine.solve(
+        empirical_from_window(second, keep_returns=True),
+        warm=True,
+    )
+    reference = estimator.fit(second).weights_
+
+    tolerance = 2e-4 if risk_measure in {RiskMeasure.EVAR, RiskMeasure.EDAR} else 2e-5
+    np.testing.assert_allclose(observed, reference, rtol=0, atol=tolerance)
+    assert id(engine._A) == matrix_id
+    assert id(engine._A.data) == data_id
+    assert engine.n_warm_starts == 1
+
+
+@pytest.mark.parametrize("l2_coef", [0.0, 1e-5, 0.1])
+def test_analytic_max_return_matches_mean_risk(l2_coef):
+    X = synthetic_returns(80, 5, seed=93)
+    estimator = MeanRisk(
+        objective_function=ObjectiveFunction.MAXIMIZE_RETURN,
+        risk_measure=RiskMeasure.CVAR,
+        min_weights=-0.2,
+        max_weights=0.6,
+        l2_coef=l2_coef,
+    )
+    reference = estimator.fit(X).weights_
+    moments = empirical_from_window(X, keep_returns=False)
+    engine = make_compact_engine(
+        estimator_spec(estimator),
+        n_assets=X.shape[1],
+        n_observations=None,
+    )
+    observed = engine.solve(moments, warm=False)
+    np.testing.assert_allclose(observed, reference, rtol=0, atol=2e-5)
+    assert observed.sum() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_max_return_ignores_risk_topology_and_uses_analytic_backend():
+    X = synthetic_returns(96, 6, seed=94)
+    cv = WalkForward(train_size=36, test_size=12)
+    estimator = MeanRisk(
+        objective_function=ObjectiveFunction.MAXIMIZE_RETURN,
+        risk_measure=RiskMeasure.ULCER_INDEX,
+        l2_coef=1e-5,
+    )
+    reference = skfolio_cv_predict(estimator, X, cv=cv)
+    observed, report = cross_val_predict(estimator, X, cv=cv, return_report=True)
+    np.testing.assert_allclose(
+        path_sharpes(observed),
+        path_sharpes(reference),
+        rtol=1e-6,
+        atol=1e-8,
+    )
+    assert report.backend == "max-return"
 
 
 @pytest.mark.parametrize(

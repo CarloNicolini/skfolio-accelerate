@@ -20,7 +20,11 @@ from sklearn.base import clone
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec
 from skfolio_accelerate.cv_plan import FoldSpec
 from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
-from skfolio_accelerate.moments import PathMomentSession, path_moment_session
+from skfolio_accelerate.moments import (
+    PathMomentSession,
+    is_default_empirical,
+    path_moment_session,
+)
 from skfolio_accelerate.scoring import window_view
 
 _PORTFOLIO_ATTRS = (
@@ -316,14 +320,28 @@ def solve_sequential_folds(
     weights: dict[int, NDArray[np.float64]] = {}
     solve_s = 0.0
     n_assets = int(x_arr.shape[1])
+    moment_session = (
+        path_moment_session(
+            x_arr,
+            folds,
+            keep_returns=True,
+            keep_covariance=True,
+        )
+        if is_default_empirical(estimator)
+        else None
+    )
     for fold in folds:
-        x_train = _train_slice(X, x_arr, fold)
-        y_train = _train_target(y_arr, fold, n_assets)
         started = time.perf_counter()
-        if y_train is None:
-            adapter.fit(x_train)
-        else:
-            adapter.fit(x_train, y_train)
+        reused = moment_session is not None and adapter.fit_from_moments(
+            moment_session.get(fold)
+        )
+        if not reused:
+            x_train = _train_slice(X, x_arr, fold)
+            y_train = _train_target(y_arr, fold, n_assets)
+            if y_train is None:
+                adapter.fit(x_train)
+            else:
+                adapter.fit(x_train, y_train)
         fitted = np.asarray(adapter.weights_, dtype=np.float64)
         if fitted.ndim != 1:
             raise ValueError("2-dimensional weights_ cannot be assembled")
