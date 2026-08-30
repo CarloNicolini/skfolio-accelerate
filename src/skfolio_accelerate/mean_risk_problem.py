@@ -289,7 +289,8 @@ class ParametricMeanRisk(MeanRisk):
         ``equations_to_matrix``).
         """
         return (
-            distribution.factor_model is not None and self.linear_constraints is not None
+            distribution.factor_model is not None
+            and self.linear_constraints is not None
         )
 
     def _fit(self, X, y=None, method: str = "fit", **fit_params):
