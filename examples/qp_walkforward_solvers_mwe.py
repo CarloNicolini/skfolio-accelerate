@@ -172,7 +172,16 @@ def run_cosmo_persist(R: np.ndarray, cuts: list[int], warm: bool) -> dict:
     P = sparse.triu(sparse.csc_matrix(2.0 * RISK_AVERSION * (L @ L.T))).tocsc()
     q = -mu
     solver = CosmoSolver(
-        P, q, A, b, cones, verbose=False, eps_abs=EPS, eps_rel=EPS, max_iter=10_000
+        P,
+        q,
+        A,
+        b,
+        cones,
+        verbose=False,
+        eps_abs=EPS,
+        eps_rel=EPS,
+        max_iter=25_000,
+        check_termination=25,
     )
     t0 = time.perf_counter()
     sol = solver.solve()
