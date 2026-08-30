@@ -223,23 +223,16 @@ class MaxReturnBox:
         self.l2 = float(spec.l2_coef)
         self.n_warm_starts = 0
 
-    def solve(
-        self, moments: FoldMoments, *, warm: bool = True
-    ) -> NDArray[np.float64]:
+    def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
         """Maximize ``mu @ w - l2 * ||w||²`` under box and budget constraints."""
         del warm
         mu = np.asarray(moments.mu, dtype=np.float64)
         if mu.shape != (self.n_assets,):
-            raise ValueError(
-                f"expected return shape {mu.shape} != {(self.n_assets,)}"
-            )
+            raise ValueError(f"expected return shape {mu.shape} != {(self.n_assets,)}")
         min_budget = float(self.min_w.sum())
         max_budget = float(self.max_w.sum())
         tolerance = 1e-12 * max(1.0, abs(self.budget))
-        if (
-            self.budget < min_budget - tolerance
-            or self.budget > max_budget + tolerance
-        ):
+        if self.budget < min_budget - tolerance or self.budget > max_budget + tolerance:
             raise ValueError("budget is infeasible for the weight bounds")
 
         weights = self.min_w.copy()

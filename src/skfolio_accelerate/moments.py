@@ -188,11 +188,7 @@ def empirical_from_stats(
     """Moments from ``(n, sum, XᵀX)``; omit covariance when ``gram`` is ``None``."""
     t = int(n_obs)
     mu = sum_vec / t
-    cov = (
-        None
-        if gram is None
-        else (gram - np.outer(sum_vec, sum_vec) / t) / (t - ddof)
-    )
+    cov = None if gram is None else (gram - np.outer(sum_vec, sum_vec) / t) / (t - ddof)
     return _finish_moments(mu, cov, returns, t, keep_returns=keep_returns)
 
 
