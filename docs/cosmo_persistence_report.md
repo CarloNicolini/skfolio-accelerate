@@ -125,10 +125,14 @@ later updates. `warm_start(x, y)` maps unscaled primal/dual into the scaled
 workspace. Adaptive `ρ` and Anderson history live in the workspace until
 `reset`.
 
-GitHub `CarloNicolini/COSMO.rs` **Python** bindings on `main` expose only
-`update_q`, `update_b`, `warm_start`. Rust already has `update_p` /
-`update_a` / `reset`. This experiment used a local maturin build that
-exports those methods. Without them, persist modes reconstruct each fold.
+GitHub `CarloNicolini/COSMO.rs` **Python** `main` now exports `update_p`,
+`update_a`, and `reset` (PR #3). `update_q` / `update_b` still do not
+refactor. Same-sparsity `update_p` numerically refactors. **`update_a`
+still sets `kkt = None`**; the next `solve()` rebuilds the factorisation.
+PR #4 fused residual matvecs and dropped a KKT RHS copy (~6–7% on COSMO.rs's
+own QP hot-path bench, identical ADMM iteration counts).
+
+Without those Python methods, persist modes reconstruct each fold.
 
 ## 7. Does persistent state reduce ADMM iterations?
 
@@ -198,7 +202,7 @@ and is the compact-engine effect, not a COSMO-specific miracle.
 | Risk | auto (s, engine) | COSMO (s) | COSMO vs auto |
 | --- | ---: | ---: | ---: |
 | VARIANCE | 0.002 OSQP | 0.001 | comparable (noise at 1 ms) |
-| SEMI_DEVIATION | 0.004 Clarabel | 0.016 | COSMO **slower** |
+| SEMI_DEVIATION | 0.004 Clarabel | 0.015 | COSMO **slower** |
 | CVAR (`l2=1e-5` → Clarabel not HiGHS) | 0.002 | 0.055 | COSMO **much slower** |
 | MAX_DRAWDOWN | 0.003 Clarabel | refused on CV path | auto wins |
 
@@ -207,6 +211,34 @@ and is the compact-engine effect, not a COSMO-specific miracle.
 Variance: persist_full 0.001 s vs cold 0.001 s (iteration cut 68.5 → 33;
 wall clock drowned in Python). Scenario: persist_full **slower** and more
 iterations than cold.
+
+## 13b. COSMO.rs `main` upgrade (same host, same flags)
+
+Protocol: time the previous COSMO.rs wheel, then without leaving the
+machine install `ec6268c` (`update_p` / `update_a` / `reset` on Python +
+ADMM hot-path tweaks) and rerun `python benchmark/run_cosmo.py --quick`.
+Δ% = `100 * (new_time - old_time) / old_time`. Positive means the new
+COSMO.rs is slower.
+
+| Cell | Old (s) | New (s) | Δ% | Mean iter |
+| --- | ---: | ---: | ---: | ---: |
+| VARIANCE `backend=cosmo` | 0.001 | 0.001 | noise at 1 ms | 33.2 both |
+| SEMI_DEVIATION `backend=cosmo` | 0.017 | 0.015 | −12% | 702 both |
+| CVAR `backend=cosmo` | 0.056 | 0.055 | −2% | 3853 both |
+| CVAR cold ablation | 0.040 | 0.037 | −8% | 2847 both |
+| CVAR persist_full | 0.054 | 0.051 | −6% | 3879 both |
+| MAX_DRAWDOWN persist_factor | 0.140 | 0.137 | −2% | 2675 both; still a bad LP |
+
+ADMM **iteration counts are identical**. That matches COSMO.rs PR #4
+(fused residuals / fewer copies; algorithm unchanged). The few-millisecond
+wall-clock dip on CVaR/semi-deviation is consistent with a ~6% hotter ADMM
+step, not with KKT reuse on `update_a` (`kkt` is still dropped). Auto
+Clarabel remains ~0.002–0.004 s on those cells.
+
+Results:
+
+* old wheel: `benchmark/results/cosmo/2026-08-30_28edd4a/`
+* COSMO.rs `ec6268c`: `benchmark/results/cosmo/2026-08-30_28edd4a_ec6268c/`
 
 ## 14. Which formulations benefit most?
 
@@ -309,7 +341,8 @@ sequential CVXPY → assemble → sklearn.
 
 ## 26. Production-quality follow-up
 
-1. Upstream Python `update_p` / `update_a` / `reset` on COSMO.rs.
+1. Same-sparsity numerical `update_a` (keep QDLDL symbolic analysis) if
+   class-B walk-forward ever becomes competitive with Clarabel.
 2. Larger panels: 50–250 assets, hundreds of folds, rolling and expanding,
    MRC/CPCV, `n_jobs` break-even on a many-core host.
 3. Do not put COSMO on `auto` unless it beats Clarabel on SEMI_DEVIATION /
@@ -331,13 +364,13 @@ sequential CVXPY → assemble → sklearn.
 
 ## Environment (quick run that produced the tables above)
 
-* skfolio-accelerate SHA `6607d3d` (this branch); results in
-  `benchmark/results/cosmo/2026-08-29_6607d3d/`
+* skfolio-accelerate SHA `28edd4a` (this branch) for the COSMO.rs upgrade pair
+* COSMO.rs old: local patched tree used for `2026-08-30_28edd4a/`
+* COSMO.rs new: `ec6268c` (`2026-08-30_28edd4a_ec6268c/`)
+* Earlier panel: `6607d3d` in `benchmark/results/cosmo/2026-08-29_6607d3d/`
 * skfolio 1.0.1
 * Python 3.12.3
 * clarabel 0.11.1, osqp 1.1.3, highspy 1.15.1, numpy 2.5.2, cosmo-rs 0.1.0
-  (local `/tmp/COSMO.rs` maturin build with Python `update_p` / `update_a` /
-  `reset`)
 * cvxpy-base 1.9.2
 * rustc 1.83.0
 * Panel: 80 observations × 6 assets, train=40, test=10, 4 folds, `--quick`

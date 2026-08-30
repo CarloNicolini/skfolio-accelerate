@@ -11,8 +11,8 @@ It is **not** a PR-vs-main relative benchmark. Do not paste these seconds
 against ``benchmark/results/YYYY-MM-DD_*`` from another machine. See
 ``AGENTS.md``.
 
-Outputs land in ``benchmark/results/cosmo/<date>_<sha>/`` and are never
-overwritten.
+Outputs land in ``benchmark/results/cosmo/<date>_<sha>_<cosmo-sha>/``
+and are never overwritten.
 """
 
 from __future__ import annotations
@@ -64,11 +64,36 @@ RISKS = (
 MODES = ("cold", "warm_x", "warm_xy", "persist_factor", "persist_full")
 
 
+def _cosmo_rs_git() -> dict[str, str | None]:
+    """Best-effort COSMO.rs revision from the installed package checkout."""
+    try:
+        import cosmo_rs
+    except ImportError:
+        return {"cosmo_rs_git_sha": None, "cosmo_rs_git_sha_short": None}
+    path = Path(cosmo_rs.__file__).resolve()
+    for parent in path.parents:
+        git_dir = parent / ".git"
+        if git_dir.exists():
+            try:
+                sha = subprocess.check_output(
+                    ["git", "-C", str(parent), "rev-parse", "HEAD"],
+                    text=True,
+                ).strip()
+            except Exception:
+                break
+            return {
+                "cosmo_rs_git_sha": sha,
+                "cosmo_rs_git_sha_short": sha[:7],
+            }
+    return {"cosmo_rs_git_sha": None, "cosmo_rs_git_sha_short": None}
+
+
 def _output_dir(root: Path) -> Path:
     meta = git_metadata()
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     sha = meta["git_sha_short"] or "unknown"
-    path = root / "benchmark" / "results" / "cosmo" / f"{stamp}_{sha}"
+    cosmo = _cosmo_rs_git().get("cosmo_rs_git_sha_short") or "cosmo"
+    path = root / "benchmark" / "results" / "cosmo" / f"{stamp}_{sha}_{cosmo}"
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -229,6 +254,7 @@ def main(argv: list[str] | None = None) -> int:
         "n_assets": n_assets,
         "train_size": train,
         "test_size": test,
+        **_cosmo_rs_git(),
     }
     try:
         from importlib.metadata import version

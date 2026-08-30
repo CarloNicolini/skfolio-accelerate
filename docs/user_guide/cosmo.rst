@@ -44,16 +44,19 @@ compact path. If COSMO fails, the call retries native Clarabel
 What is reused
 **************
 
-Verified from COSMO.rs source, not inferred from docs:
+Verified from COSMO.rs ``main`` (PR #3 Python API, PR #4 ADMM hot paths):
 
 * ``update_q`` / ``update_b`` — no KKT refactor
 * ``update_p`` — numerical refactor when the sparsity pattern is unchanged;
   full rebuild if the pattern changes
-* ``update_a`` — always drops the KKT factorisation
+* ``update_a`` — drops the KKT object; the next ``solve()`` rebuilds it
+  (scenario-return walk-forward is still class B)
+* ``reset("cold"|"factor")`` — drop ADMM iterates; ``factor`` keeps ρ and
+  a still-valid factorisation (not valid after ``update_a``)
 * ``warm_start(x, y)`` — unscaled primal / dual
 * After the first ``solve``, Ruiz scaling is kept
-* Adaptive ``ρ`` and Anderson history stay in the workspace until
-  ``reset`` or a reconstruct persist mode
+* Adaptive ``ρ`` and Anderson history stay until ``reset`` or a reconstruct
+  persist mode
 
 Walk-forward with fixed ``T`` is class **C** for variance (``P`` changes)
 and class **B** for scenario risks (``A`` coefficients change). Expanding

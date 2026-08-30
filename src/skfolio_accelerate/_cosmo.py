@@ -9,9 +9,11 @@ update ``P`` / ``q`` / ``A`` / ``b`` in place when the persist mode allows it
 and keep ADMM iterates when that is mathematically valid. See
 :mod:`skfolio_accelerate.formulations` for the class A–F map.
 
-COSMO.rs Python bindings expose ``update_q``, ``update_b`` (no refactor),
-``update_p`` (numerical refactor, same sparsity), and ``update_a`` (KKT
-rebuild). This module does not claim factorisation reuse for ``update_a``.
+COSMO.rs Python bindings expose ``update_q``, ``update_b`` (no KKT
+refactor), ``update_p`` (numerical refactor when sparsity is unchanged),
+``update_a`` (drops the KKT object; next ``solve`` rebuilds it), and
+``reset``. GitHub ``main`` ships these methods. This module still
+reconstructs the solver if an older wheel is missing them.
 """
 
 from __future__ import annotations
@@ -80,10 +82,9 @@ def cosmo_available() -> bool:
 def cosmo_persistence_api_available() -> bool:
     """True when COSMO.rs exposes ``update_p`` / ``update_a`` / ``reset``.
 
-    GitHub ``main`` Python bindings currently expose only ``update_q``,
-    ``update_b``, and ``warm_start``. Persistence requires the extra methods
-    (Rust already has them). Without them, persist modes reconstruct the
-    solver each fold.
+    COSMO.rs ``main`` (PR #3) exports these on ``CosmoSolver``. Older wheels
+    that only had ``update_q`` / ``update_b`` / ``warm_start`` reconstruct
+    the solver each fold.
     """
     if not cosmo_available():
         return False
@@ -96,8 +97,9 @@ def default_persist_mode(spec: MeanRiskSpec) -> PersistMode:
     """Persist mode justified by the walk-forward ablation.
 
     Variance is class C (``update_p``, KKT pattern reusable). Scenario risks
-    are class B (``update_a`` drops the KKT system); carrying stale ADMM
-    iterates increased iteration count on the measured panel.
+    are class B: ``update_a`` still drops the KKT object on COSMO.rs ``main``
+    (next ``solve`` rebuilds it). Carrying stale ADMM iterates increased
+    iteration count on the measured panel, so the default is ``persist_factor``.
     """
     if spec.risk_measure is RiskMeasure.VARIANCE:
         return "persist_full"

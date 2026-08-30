@@ -91,6 +91,12 @@ def test_cosmo_weights_match_compact_clarabel_or_osqp(risk_measure, objective):
     assert np.max(observed) <= 0.6 + 2e-6
 
 
+def test_persistence_api_is_available():
+    from skfolio_accelerate._cosmo import cosmo_persistence_api_available
+
+    assert cosmo_persistence_api_available()
+
+
 def test_default_persist_mode_depends_on_risk():
     var = _spec(MeanRisk(risk_measure=RiskMeasure.VARIANCE, l2_coef=1e-5))
     cvar = _spec(MeanRisk(risk_measure=RiskMeasure.CVAR, l2_coef=1e-5))
