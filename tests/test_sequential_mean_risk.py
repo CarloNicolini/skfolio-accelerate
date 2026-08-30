@@ -111,7 +111,7 @@ def test_fixed_window_default_prior_is_only_fitted_once(monkeypatch):
         return original(self, X, y, **fit_params)
 
     monkeypatch.setattr(EmpiricalPrior, "fit", counted_fit)
-    X = synthetic_returns(84, 5, seed=10)
+    X = synthetic_returns(84, 5, seed=4)
     estimator = MeanRisk(min_return=1e-5, l2_coef=1e-5)
     _, report = cross_val_predict(
         estimator,
