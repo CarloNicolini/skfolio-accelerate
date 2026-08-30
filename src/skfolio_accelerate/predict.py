@@ -587,6 +587,7 @@ def cross_val_predict(
                             x_arr,
                             batch,
                             keep_returns=keep_returns,
+                            keep_covariance=not keep_returns,
                             fold_blocks=cv_plan.fold_blocks,
                         ),
                         batch,

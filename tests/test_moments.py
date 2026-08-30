@@ -66,6 +66,19 @@ def test_walkforward_slides_match_full_window_recompute():
     assert cache.n_updates == plan.n_splits - 1
 
 
+def test_walkforward_scenario_moments_skip_covariance():
+    X = synthetic_returns(80, 5, seed=19)
+    plan = compile_cv_plan(WalkForward(train_size=30, test_size=10), X)
+    cache = OverlapMomentCache(X, keep_returns=True, keep_covariance=False)
+    for fold in plan.folds:
+        observed = cache.get(fold)
+        window = X[fold.train_idx]
+        np.testing.assert_allclose(observed.mu, np.mean(window, axis=0), atol=1e-12)
+        np.testing.assert_allclose(observed.returns, window)
+        assert observed.covariance.shape == (0, 0)
+    assert all(state.gram is None for state in cache._slide.values())
+
+
 def test_purged_cpcv_blocks_match_training_rows():
     X = synthetic_returns(60, 4, seed=10)
     cv = CombinatorialPurgedCV(n_folds=4, n_test_folds=2, purged_size=1, embargo_size=1)
@@ -84,6 +97,23 @@ def test_purged_cpcv_blocks_match_training_rows():
         np.testing.assert_allclose(observed.returns, window)
     assert cache.n_fits == cv.n_folds
     assert cache.n_updates == cv.get_n_splits()
+
+
+def test_purged_cpcv_scenario_blocks_skip_covariance():
+    X = synthetic_returns(60, 4, seed=20)
+    cv = CombinatorialPurgedCV(n_folds=4, n_test_folds=2)
+    plan = compile_cv_plan(cv, X)
+    cache = OverlapMomentCache(
+        X,
+        keep_returns=True,
+        keep_covariance=False,
+        fold_blocks=plan.fold_blocks,
+    )
+    observed = cache.get(plan.folds[0])
+    np.testing.assert_allclose(observed.mu, np.mean(X[plan.folds[0].train_idx], axis=0))
+    assert observed.covariance.shape == (0, 0)
+    assert cache._blocks is not None
+    assert all(block.gram is None for block in cache._blocks)
 
 
 def test_assume_centered_prior_is_not_compacted():
