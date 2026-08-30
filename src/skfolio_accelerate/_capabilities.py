@@ -203,6 +203,8 @@ def _closed_form_blocked(estimator) -> str | None:
 
 
 def _mean_risk_compact_blocked(estimator: MeanRisk) -> str | None:
+    if type(estimator) not in {MeanRisk, ParametricMeanRisk}:
+        return "MeanRisk subclasses are not compacted"
     if name := _first_set_attr(estimator, _COMPACT_NONE_ATTRS):
         return f"{name} is not compacted"
     if estimator.budget is None:
