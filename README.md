@@ -29,6 +29,7 @@ It appears that problems with *easy* constraints (like box constraints, budget e
 There are other few computational tricks to squeeze further CPU cycles:
 
 - overlapping training moments are updated from sufficient statistics;
+- boxed maximum-return portfolios use an analytic L2-regularized projection;
 - boxed variance uses a compact OSQP QP reused across folds;
 - boxed scenario LPs (MAD, CVaR, …) use a persistent HiGHS simplex basis;
 - other boxed scenario cones use a compact Clarabel problem;
@@ -62,7 +63,8 @@ All reuse is local to one call. The package does not keep global caches of retur
 Leave `backend="auto"` uses the optimally found strategy for the given `MeanRisk` selected `ObjectiveFunction`, `RiskMeasure` and other constraints that you have specified.
 The policy that comes from manually selected benchmarks, picks the best engine:
 
-1. compact OSQP (boxed variance) / HiGHS (boxed LP) / Clarabel (boxed scenario cones)
+1. analytic maximum-return / compact OSQP (boxed variance) / HiGHS (boxed LP) /
+   Clarabel (boxed scenario cones)
 2. Parameterized CVXPY reuse (`cvxpy-sequential`) for other MeanRisk configurations with a fixed training shape;
 3. serial assembly from `weights_` (native `fit` unless the weights are a trivial formula);
 4. unmodified skfolio.

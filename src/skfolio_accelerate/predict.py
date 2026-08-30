@@ -203,6 +203,8 @@ def _choice_reason(backend: str, capabilities: CallCapabilities) -> str:
             return "boxed MeanRisk LP; persistent HiGHS simplex"
         case "clarabel":
             return "boxed MeanRisk scenario risk; compact Clarabel"
+        case "max-return":
+            return "boxed maximum-return MeanRisk; analytic L2 projection"
         case "closed-form":
             return "trivial weights; shared serial CV assembly"
         case "cvxpy-sequential":

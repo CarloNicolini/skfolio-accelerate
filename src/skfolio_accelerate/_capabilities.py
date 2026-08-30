@@ -33,6 +33,7 @@ BackendName = Literal[
     "osqp",
     "highs",
     "clarabel",
+    "max-return",
     "cvxpy-sequential",
     "closed-form",
     "fit-assemble",
@@ -43,6 +44,7 @@ BackendName = Literal[
 _SUPPORTED_OBJECTIVES = frozenset(
     {
         ObjectiveFunction.MINIMIZE_RISK,
+        ObjectiveFunction.MAXIMIZE_RETURN,
         ObjectiveFunction.MAXIMIZE_UTILITY,
     }
 )
@@ -168,6 +170,8 @@ def _compact_backend_name(estimator) -> BackendName:
     """OSQP, HiGHS, or Clarabel for a compact-eligible estimator."""
     if type(estimator) in _CLOSED_FORM_TYPES:
         return "closed-form"
+    if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RETURN:
+        return "max-return"
     if estimator.risk_measure is RiskMeasure.VARIANCE:
         return "osqp"
     if is_highs_lp_risk(estimator_spec(estimator)):
@@ -207,9 +211,17 @@ def _mean_risk_compact_blocked(estimator: MeanRisk) -> str | None:
     if estimator.objective_function not in _SUPPORTED_OBJECTIVES:
         return "objective_function is not compacted"
     risk = estimator.risk_measure
-    if risk not in _SUPPORTED_RISKS:
+    if (
+        estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
+        and risk not in _SUPPORTED_RISKS
+    ):
         return "risk_measure is not compacted"
-    allowed = {"CLARABEL", "OSQP"} if risk is RiskMeasure.VARIANCE else {"CLARABEL"}
+    allowed = (
+        {"CLARABEL", "OSQP"}
+        if risk is RiskMeasure.VARIANCE
+        and estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
+        else {"CLARABEL"}
+    )
     if estimator.solver not in allowed:
         return f"solver {estimator.solver!r} is not compacted for {risk.name}"
     if _nonzero(estimator.l1_coef):

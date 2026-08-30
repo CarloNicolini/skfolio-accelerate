@@ -166,6 +166,47 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
     assert np.max(observed) <= 0.6 + 2e-7
 
 
+@pytest.mark.parametrize("l2_coef", [0.0, 1e-5, 0.1])
+def test_analytic_max_return_matches_mean_risk(l2_coef):
+    X = synthetic_returns(80, 5, seed=93)
+    estimator = MeanRisk(
+        objective_function=ObjectiveFunction.MAXIMIZE_RETURN,
+        risk_measure=RiskMeasure.CVAR,
+        min_weights=-0.2,
+        max_weights=0.6,
+        l2_coef=l2_coef,
+    )
+    reference = estimator.fit(X).weights_
+    moments = empirical_from_window(X, keep_returns=False)
+    engine = make_compact_engine(
+        estimator_spec(estimator),
+        n_assets=X.shape[1],
+        n_observations=None,
+    )
+    observed = engine.solve(moments, warm=False)
+    np.testing.assert_allclose(observed, reference, rtol=0, atol=2e-5)
+    assert observed.sum() == pytest.approx(1.0, abs=1e-12)
+
+
+def test_max_return_ignores_risk_topology_and_uses_analytic_backend():
+    X = synthetic_returns(96, 6, seed=94)
+    cv = WalkForward(train_size=36, test_size=12)
+    estimator = MeanRisk(
+        objective_function=ObjectiveFunction.MAXIMIZE_RETURN,
+        risk_measure=RiskMeasure.ULCER_INDEX,
+        l2_coef=1e-5,
+    )
+    reference = skfolio_cv_predict(estimator, X, cv=cv)
+    observed, report = cross_val_predict(estimator, X, cv=cv, return_report=True)
+    np.testing.assert_allclose(
+        path_sharpes(observed),
+        path_sharpes(reference),
+        rtol=1e-6,
+        atol=1e-8,
+    )
+    assert report.backend == "max-return"
+
+
 @pytest.mark.parametrize(
     "option",
     [

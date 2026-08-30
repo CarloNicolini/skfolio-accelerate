@@ -187,7 +187,10 @@ class MeanRiskSpec:
 
     def needs_returns(self) -> bool:
         """``True`` when the risk measure consumes scenario returns."""
-        return self.risk_measure is not RiskMeasure.VARIANCE
+        return (
+            self.objective is not ObjectiveFunction.MAXIMIZE_RETURN
+            and self.risk_measure is not RiskMeasure.VARIANCE
+        )
 
 
 class CompactEngine(Protocol):
@@ -207,6 +210,82 @@ class CompactEngine(Protocol):
             When ``True``, reuse the previous primal/dual iterate if available.
         """
         ...
+
+
+class MaxReturnBox:
+    """Analytic maximum-return portfolio with budget, bounds, and L2 penalty."""
+
+    def __init__(self, spec: MeanRiskSpec, n_assets: int) -> None:
+        self.n_assets = int(n_assets)
+        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.budget = float(spec.budget)
+        self.l2 = float(spec.l2_coef)
+        self.n_warm_starts = 0
+
+    def solve(
+        self, moments: FoldMoments, *, warm: bool = True
+    ) -> NDArray[np.float64]:
+        """Maximize ``mu @ w - l2 * ||w||²`` under box and budget constraints."""
+        del warm
+        mu = np.asarray(moments.mu, dtype=np.float64)
+        if mu.shape != (self.n_assets,):
+            raise ValueError(
+                f"expected return shape {mu.shape} != {(self.n_assets,)}"
+            )
+        min_budget = float(self.min_w.sum())
+        max_budget = float(self.max_w.sum())
+        tolerance = 1e-12 * max(1.0, abs(self.budget))
+        if (
+            self.budget < min_budget - tolerance
+            or self.budget > max_budget + tolerance
+        ):
+            raise ValueError("budget is infeasible for the weight bounds")
+
+        weights = self.min_w.copy()
+        if self.l2 == 0.0:
+            remaining = self.budget - min_budget
+            for index in np.argsort(-mu, kind="stable"):
+                addition = min(remaining, self.max_w[index] - self.min_w[index])
+                weights[index] += addition
+                remaining -= addition
+                if remaining <= tolerance:
+                    break
+            return weights
+
+        free = np.ones(self.n_assets, dtype=bool)
+        fixed_sum = 0.0
+        while np.any(free):
+            free_mu = mu[free]
+            multiplier = (
+                free_mu.sum() + 2.0 * self.l2 * (fixed_sum - self.budget)
+            ) / free_mu.size
+            free_weights = (free_mu - multiplier) / (2.0 * self.l2)
+            free_indices = np.flatnonzero(free)
+            below = free_weights < self.min_w[free]
+            above = free_weights > self.max_w[free]
+            if not np.any(below | above):
+                weights[free] = free_weights
+                break
+            bounded_indices = free_indices[below | above]
+            weights[bounded_indices] = np.where(
+                below[below | above],
+                self.min_w[bounded_indices],
+                self.max_w[bounded_indices],
+            )
+            fixed_sum += float(weights[bounded_indices].sum())
+            free[bounded_indices] = False
+
+        residual = self.budget - float(weights.sum())
+        if abs(residual) > tolerance:
+            movable = np.flatnonzero(
+                weights < self.max_w - tolerance
+                if residual > 0
+                else weights > self.min_w + tolerance
+            )
+            if movable.size:
+                weights[movable[0]] += residual
+        return weights
 
 
 def estimator_spec(estimator) -> MeanRiskSpec:
@@ -951,6 +1030,8 @@ def make_compact_engine(
         a scenario risk.
     """
     risk = spec.risk_measure
+    if spec.objective is ObjectiveFunction.MAXIMIZE_RETURN:
+        return MaxReturnBox(spec, n_assets)
     if risk is RiskMeasure.VARIANCE:
         return MinVarianceOSQP(spec, n_assets)
     if risk not in _SCENARIO_RISKS:
