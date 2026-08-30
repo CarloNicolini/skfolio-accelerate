@@ -3,8 +3,9 @@
 Acceleration report backends
 ============================
 
-Compare the backend selected for MeanRisk variance versus EqualWeighted on the
-same WalkForward plan.
+The same compiled CV plan can run a compact MeanRisk solver or a serial
+estimator that still calls native ``fit``. The second path is shared
+bookkeeping (slices, assembly from ``weights_``), not an optimizer.
 """
 
 # %%
@@ -12,7 +13,7 @@ same WalkForward plan.
 # -----
 from skfolio.datasets import load_sp500_dataset
 from skfolio.model_selection import WalkForward
-from skfolio.optimization import EqualWeighted, MeanRisk
+from skfolio.optimization import HierarchicalRiskParity, MeanRisk
 from skfolio.preprocessing import prices_to_returns
 
 from skfolio_accelerate import cross_val_predict
@@ -33,13 +34,13 @@ _, mean_risk_report = cross_val_predict(
 print("MeanRisk backend:", mean_risk_report.backend)
 
 # %%
-# EqualWeighted uses closed-form weights
-# --------------------------------------
-_, equal_report = cross_val_predict(
-    EqualWeighted(),
+# HierarchicalRiskParity still fits, then shares assembly
+# -------------------------------------------------------
+_, hrp_report = cross_val_predict(
+    HierarchicalRiskParity(),
     X,
     cv=cv,
     return_report=True,
 )
-print("EqualWeighted backend:", equal_report.backend)
-print(equal_report)
+print("HierarchicalRiskParity backend:", hrp_report.backend)
+print(hrp_report)

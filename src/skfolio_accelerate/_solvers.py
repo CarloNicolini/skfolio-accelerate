@@ -198,6 +198,7 @@ def closed_form_weights(
 
     Notes
     -----
+    This is the skip-``fit`` case of the shared serial assembly path.
     EqualWeighted and Random never touch the return matrix. InverseVolatility
     reuses the same overlapping-moment cache as compact MeanRisk variance.
     """
@@ -371,8 +372,10 @@ def fit_native_weights(
     Notes
     -----
     This is the shared serial path for estimators outside the compact subset
-    (HRP, risk budgeting, ratio objectives, ...). Portfolio objects are not
-    built here; see :func:`~skfolio_accelerate.scoring.assemble_prediction`.
+    (HRP, risk budgeting, ratio objectives, ...). The same compiled CV plan
+    and ``weights_`` assembly is used when ``fit`` is skipped. Portfolio
+    objects are not built here; see
+    :func:`~skfolio_accelerate.scoring.assemble_prediction`.
     """
     n_assets = int(x_arr.shape[1])
     weights: dict[int, NDArray[np.float64]] = {}

@@ -5,18 +5,14 @@ problem. The public entry point is :func:`cross_val_predict`, a drop-in
 replacement for :func:`skfolio.model_selection.cross_val_predict`.
 
 A call is compiled once into a :class:`~skfolio_accelerate.cv_plan.CVPlan`, then
-executed by one of several backends:
-
-* compact OSQP / HiGHS / Clarabel engines for a subset of
-  :class:`~skfolio.optimization.MeanRisk`,
-* Parameterized reuse of skfolio's MeanRisk CVXPY problem when extra
-  constraints keep a fixed training shape,
-* closed-form weights for default
-  :class:`~skfolio.optimization.EqualWeighted`,
-  :class:`~skfolio.optimization.Random`, and
-  :class:`~skfolio.optimization.InverseVolatility`,
-* native ``fit`` plus weight assembly for other serial optimizers,
-* unmodified skfolio when the call options require it.
+executed. Compact OSQP / HiGHS / Clarabel engines and Parameterized MeanRisk
+reuse amortize the *solver* for a subset of
+:class:`~skfolio.optimization.MeanRisk`. Every other serial
+:class:`~skfolio.optimization.BaseOptimization` still gets the same compiled
+plan, contiguous slices, and assembly from ``weights_`` (skipping joblib,
+train/test copies, and ``predict()``). A few estimators have trivial weights
+and skip ``fit``; that is the same bookkeeping path, not a second optimizer.
+Unmodified skfolio is used when the call options require it.
 
 See the user guide for eligibility rules, backend reports, and hyperparameter
 search with :func:`grid_search`.

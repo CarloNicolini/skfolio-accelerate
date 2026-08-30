@@ -34,9 +34,13 @@ There are other few computational tricks to squeeze further CPU cycles:
 - other boxed scenario cones use a compact Clarabel problem;
 - other MeanRisk configurations reuse skfolio's own CVXPY problem
   (`mu`, scenario returns, and covariance square-root are `cp.Parameter`);
-- test portfolios are assembled from `weights_`.
-
-Estimators that cannot reuse a compiled problem still call native `fit`, then use that same assembly path unless the call needs sequential `previous_weights`, a pipeline, parallel `n_jobs`, or another option that changes how `predict` is called.
+- every serial estimator shares one compiled CV plan, contiguous slices, and
+  assembly from `weights_` (skipping joblib, `safe_split` copies, and
+  `predict()`). That bookkeeping is independent of MeanRisk. Estimators with
+  trivial weights skip `fit`; the others still call native `fit` and then use
+  the same assembly unless the call needs sequential `previous_weights`, a
+  pipeline, parallel `n_jobs`, or another option that changes how `predict`
+  is called.
 
 ## More in detail
 
@@ -47,7 +51,9 @@ Backtests repeatedly fit nearly identical portfolios. This package recognises th
 - It reuses a compact OSQP, HiGHS, or Clarabel problem shape for boxed MeanRisk.
 - It reuses skfolio's MeanRisk CVXPY graph across folds when extra options keep a fixed training length.
 - It scores compact hyperparameter candidates from weights before constructing the final portfolio objects.
-- It compiles the CV plan once and builds test portfolios from `weights_`, so serial calls skip joblib, `safe_split` copies, and `predict()` construction.
+- It compiles the CV plan once and builds test portfolios from `weights_`.
+  That Python-side path (views instead of copies, no joblib, no per-fold
+  `predict()`) is shared by every serial estimator, not only MeanRisk.
 
 All reuse is local to one call. The package does not keep global caches of returns, estimators, fitted priors, or portfolios.
 
@@ -58,7 +64,7 @@ The policy that comes from manually selected benchmarks, picks the best engine:
 
 1. compact OSQP (boxed variance) / HiGHS (boxed LP) / Clarabel (boxed scenario cones)
 2. Parameterized CVXPY reuse (`cvxpy-sequential`) for other MeanRisk configurations with a fixed training shape;
-3. native `fit` plus assembly from `weights_`;
+3. serial assembly from `weights_` (native `fit` unless the weights are a trivial formula);
 4. unmodified skfolio.
 
 `"osqp"`, `"highs"`, `"clarabel"`, and `"cvxpy-sequential"` are the policy's choices, not a user setting.
@@ -219,16 +225,17 @@ Mean path Sharpe matched native (typical Δ ~ 1e-6). Reproduce with
 
 On the small 120 × 6 suite every fold still pays CVXPY setup, so compact
 scenario risks look closer to variance. That ratio does not survive once the
-cone solve dominates. Closed-form EqualWeighted / Random / InverseVolatility
-skip native CV machinery (about 5–13× on this tiny problem). Serial estimators
-that still call native `fit` (HRP, …) are 1.05–2.1× — the same overhead cut,
+cone solve dominates. Serial assembly (the compiled plan, views, and
+`weights_` portfolios) is the same path for every non-compact estimator.
+When `fit` is free the ratio on this tiny problem looks like 5–13×; when
+`fit` still runs (HRP, …) it is 1.05–2.1× — the same constant CV overhead,
 not a compact solver. Pipelines stay on native skfolio (~1×). Peak RSS is
 typically similar to native because importing Python and skfolio dominates
 these processes.
 
 ![Quick benchmark speedups by engine](docs/figures/quick-benchmark-speedups.svg)
 
-![EqualWeighted native CV overhead](docs/figures/cv-overhead-breakdown.svg)
+![Serial CV overhead versus native `cross_val_predict`](docs/figures/cv-overhead-breakdown.svg)
 
 ### Parallel folds and solver threads
 

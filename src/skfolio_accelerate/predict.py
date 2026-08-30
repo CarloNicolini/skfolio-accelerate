@@ -3,14 +3,15 @@
     A call is classified once, then executed as:
 
     CV definition → compiled :class:`~skfolio_accelerate.cv_plan.CVPlan`
-    → backend (compact / sequential CVXPY / closed-form / fit-assemble / native)
-    → fold weights → assembled Portfolio objects
+    → weights (compact / sequential CVXPY / native ``fit`` / trivial formula)
+    → assembled Portfolio objects
 
 Compact OSQP, HiGHS, and Clarabel kernels accelerate a subset of MeanRisk.
-EqualWeighted, Random, and default InverseVolatility use closed-form weights.
-Remaining serial estimators still call native ``fit``, then assemble test
-portfolios from ``weights_`` so they skip joblib, train/test copies, and
-``predict()``.
+Every other serial estimator shares the compiled plan, contiguous training
+slices, and assembly from ``weights_``, which skips joblib, ``safe_split``
+copies, and ``predict()``. That bookkeeping saving is independent of the
+estimator: EqualWeighted happens to skip ``fit`` because the weights are
+trivial; HRP still calls native ``fit`` and then uses the same assembly.
 
 The accelerator never reinterprets an unsupported estimator as a nearby
 compact problem. Capability checks are the only gate; numerical engines assume
@@ -203,7 +204,7 @@ def _choice_reason(backend: str, capabilities: CallCapabilities) -> str:
         case "clarabel":
             return "boxed MeanRisk scenario risk; compact Clarabel"
         case "closed-form":
-            return "closed-form weights; no solver"
+            return "trivial weights; shared serial CV assembly"
         case "cvxpy-sequential":
             if capabilities.compact_reason:
                 return (
@@ -348,19 +349,20 @@ def cross_val_predict(
     :class:`~skfolio.population.Population` of multi-period portfolios.
 
     Internally the call is compiled once into a
-    :class:`~skfolio_accelerate.cv_plan.CVPlan`, then executed by the first
-    eligible backend:
+    :class:`~skfolio_accelerate.cv_plan.CVPlan`. Compact engines amortize the
+    MeanRisk *solver*. Serial estimators that are not in that subset still
+    share the compiled plan and assemble test portfolios from fold weights
+    (native ``fit`` unless the weights are a trivial formula):
 
     1. compact OSQP (variance), HiGHS (scenario LPs), or Clarabel
        (scenario cones) for a narrow
        :class:`~skfolio.optimization.MeanRisk` subset,
     2. Parameterized CVXPY reuse for other MeanRisk configurations with a
        fixed problem shape,
-    3. closed-form weights for default EqualWeighted / Random /
-       InverseVolatility,
-    4. native ``fit`` plus assembly from ``weights_`` for other serial
-       optimizers,
-    5. unmodified skfolio when options or estimators require it.
+    3. serial assembly from ``weights_`` for any other
+       :class:`~skfolio.optimization.BaseOptimization` (``fit`` is skipped
+       only when weights are closed-form),
+    4. unmodified skfolio when options or estimators require it.
 
     Leave ``backend`` at ``"auto"``. Read ``report.backend`` /
     ``report.reason`` if you need to see which engine ran.
@@ -411,9 +413,9 @@ def cross_val_predict(
         Entry-rebalancing metadata. Disables amortization when set.
 
     backend : {"auto", "compact", "cvxpy-sequential", "sklearn"}, default="auto"
-        Execution policy. ``"auto"`` selects OSQP, HiGHS, Clarabel, sequential
-        CVXPY, closed-form, fit-assemble, or skfolio. The other values are
-        test/debug overrides.
+        Execution policy. ``"auto"`` selects a compact solver, sequential
+        CVXPY, serial assembly from ``weights_``, or skfolio. The other values
+        are test/debug overrides.
 
     return_report : bool, default=False
         If ``True``, also return an :class:`AccelerationReport`.
