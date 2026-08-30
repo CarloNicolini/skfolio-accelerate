@@ -253,28 +253,19 @@ class MaxReturnBox:
                     break
             return weights
 
-        free = np.ones(self.n_assets, dtype=bool)
-        fixed_sum = 0.0
-        while np.any(free):
-            free_mu = mu[free]
-            multiplier = (
-                free_mu.sum() + 2.0 * self.l2 * (fixed_sum - self.budget)
-            ) / free_mu.size
-            free_weights = (free_mu - multiplier) / (2.0 * self.l2)
-            free_indices = np.flatnonzero(free)
-            below = free_weights < self.min_w[free]
-            above = free_weights > self.max_w[free]
-            if not np.any(below | above):
-                weights[free] = free_weights
-                break
-            bounded_indices = free_indices[below | above]
-            weights[bounded_indices] = np.where(
-                below[below | above],
-                self.min_w[bounded_indices],
-                self.max_w[bounded_indices],
+        lower = float(np.min(mu - 2.0 * self.l2 * self.max_w))
+        upper = float(np.max(mu - 2.0 * self.l2 * self.min_w))
+        for _ in range(64):
+            multiplier = 0.5 * (lower + upper)
+            weights = np.clip(
+                (mu - multiplier) / (2.0 * self.l2),
+                self.min_w,
+                self.max_w,
             )
-            fixed_sum += float(weights[bounded_indices].sum())
-            free[bounded_indices] = False
+            if float(weights.sum()) > self.budget:
+                lower = multiplier
+            else:
+                upper = multiplier
 
         residual = self.budget - float(weights.sum())
         if abs(residual) > tolerance:
