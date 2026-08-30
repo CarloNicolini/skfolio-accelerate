@@ -290,3 +290,10 @@ def test_agents_md_requires_in_run_relative_benchmark():
     assert "native_time / accelerated_time" in text
     assert "one-off timers" in text
     assert "baseline.json" not in text
+
+
+def test_benchmark_runner_does_not_shadow_relative_install():
+    runner = (
+        Path(__file__).resolve().parents[1] / "benchmark" / "run_benchmark.py"
+    ).read_text()
+    assert 'ROOT / "src"' not in runner
