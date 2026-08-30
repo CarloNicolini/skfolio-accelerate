@@ -32,7 +32,7 @@ def make_synthetic(config: BenchmarkConfig) -> LoadedDataset:
     * returns = ``factors @ loadings + idiosyncratic``
 
     Columns are named ``A0`` … so MeanRisk ``linear_constraints`` extras that
-    reference ``A0`` match ``benchmarks/benchmark_sequential_mean_risk.py``.
+    reference ``A0`` match the sequential extras in ``estimators.py``.
     """
     X = factor_returns(
         config.synthetic_n_observations,

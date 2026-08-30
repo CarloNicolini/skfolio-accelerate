@@ -121,6 +121,6 @@
   <text x="50" y="1074" class="note">Many overlapping folds (WalkForward / MRC) are where reuse pays: OSQP ~35–53×, Clarabel ~2–4×, sequential ~1.7–2.9×. Six CPCV splits still rebuild when the training length changes.</text>
   <text x="50" y="1096" class="note">Sequential Ulcer on CPCV is 0.12× because T changes force rebuilds of a large graph. MAXIMIZE_RETURN EVaR/EDaR CPCV is similarly ~0.09–0.10×. MAXIMIZE_RATIO stays fit-assemble (~1.1–1.2×).</text>
   <text x="50" y="1118" class="note">MRC extras are omitted: named linear constraints fail on asset subsets, and min_return is often infeasible on random 12-asset windows. Gini omitted (~1×, ~20 min/side).</text>
-  <text x="50" y="1140" class="note">Source: benchmarks/benchmark_sequential_mean_risk.py (1 repeat, n_jobs=1, thread caps=1, seed 42); Python 3.12, skfolio 1.0.0.</text>
+  <text x="50" y="1140" class="note">Source: 20-year MeanRisk sweep (1 repeat, n_jobs=1, thread caps=1, seed 42); see README and benchmark/. Python 3.12, skfolio 1.0.0.</text>
   <text x="50" y="1162" class="note">CombinatorialPurgedCV: n_folds=4, n_test_folds=2, purge=1, embargo=1. MRC: 20 subsamples × 12 assets, window=756. WalkForward train=252, test=21.</text>
 </svg>

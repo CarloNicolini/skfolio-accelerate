@@ -225,8 +225,9 @@ The compact path is deliberately narrow. It assumes:
   weight bounds, optional L2 regularisation. No transaction costs, turnover
   constraints, management fees, or risk-free cash.
 * **Minimize-risk or maximize-utility** MeanRisk objectives for the cone
-  engines. Ratio objectives and risk limits use fit-assemble or native
-  skfolio.
+  engines. Extra constraints (risk limits, linear constraints, fees, L1) and
+  remaining risks reuse skfolio's Parameterized CVXPY problem when the
+  training shape is fixed. Ratio objectives stay on fit-assemble.
 * **Constant problem shape across folds.** Warm starts and cone reuse require
   fixed ``(n_assets, T)`` inside one call. Changing scenario length forces a
   rebuild.

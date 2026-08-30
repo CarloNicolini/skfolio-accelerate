@@ -191,7 +191,7 @@ class MeanRiskSpec:
 
 
 class CompactEngine(Protocol):
-    """Protocol for OSQP / Clarabel engines that solve one fold from moments."""
+    """Protocol for OSQP / HiGHS / Clarabel engines that solve one fold."""
 
     n_warm_starts: int
 
@@ -924,7 +924,7 @@ class ScenarioClarabel:
 def make_compact_engine(
     spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None
 ) -> CompactEngine:
-    """Construct the OSQP or Clarabel engine for ``spec``.
+    """Construct the OSQP, HiGHS, or Clarabel engine for ``spec``.
 
     Parameters
     ----------
@@ -941,8 +941,8 @@ def make_compact_engine(
     Returns
     -------
     engine : CompactEngine
-        :class:`MinVarianceOSQP`, :class:`CVaRClarabel`, or
-        :class:`ScenarioClarabel`.
+        :class:`MinVarianceOSQP`, :class:`LinearHighs`, :class:`CVaRClarabel`,
+        or :class:`ScenarioClarabel`.
 
     Raises
     ------

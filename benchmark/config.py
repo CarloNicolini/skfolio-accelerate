@@ -58,7 +58,7 @@ CONFIG: dict[str, Any] = {
     "sp500_tail_observations": None,
 }
 
-# 20-year sequential-benchmark panel (benchmarks/benchmark_sequential_mean_risk.py).
+# 20-year sequential-benchmark panel (`benchmark/run_benchmark.py --full`).
 FULL_PRESET: dict[str, Any] = {
     "synthetic_n_observations": 20 * 252,
     "synthetic_n_assets": 20,

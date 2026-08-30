@@ -288,5 +288,5 @@ def test_agents_md_requires_in_run_relative_benchmark():
     assert "python benchmark/run_benchmark.py" in text
     assert "100 * (head_time - base_time) / base_time" in text
     assert "native_time / accelerated_time" in text
-    assert "benchmarks/benchmark_" in text
+    assert "one-off timers" in text
     assert "baseline.json" not in text

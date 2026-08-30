@@ -1,7 +1,8 @@
-"""Frozen multi-path workloads used by tests and the publishable benchmark.
+"""Synthetic factor returns and small multi-path splitters for tests and examples.
 
-These helpers build synthetic factor returns and skfolio splitters with fixed
-shapes so correctness tests and timing scripts share the same workloads.
+``factor_returns`` is the same generator used by ``benchmark/datasets.py``.
+``SMOKE_MRC`` / ``SMOKE_CPCV`` are CI-scale splitters, not the 20-year
+benchmark panel in ``benchmark/config.py``.
 """
 
 from __future__ import annotations
@@ -50,19 +51,6 @@ def factor_returns(
     return pd.DataFrame(factors @ loadings + idio)
 
 
-# Published-shaped MRC (Palomar-style). Baseline is minutes on one VM;
-# the compact engine should be ≥10× vs cross_val_predict(n_jobs=-1).
-FLAGSHIP_MRC = {
-    "n_obs": 2520,
-    "n_assets": 80,
-    "n_subsamples": 500,
-    "asset_subset_size": 25,
-    "window_size": 3 * 252,
-    "train_size": 252,
-    "test_size": 21,
-    "seed": 1,
-}
-
 # CI / unit-test scale.
 SMOKE_MRC = {
     "n_obs": 420,
@@ -92,7 +80,7 @@ def make_mrc(spec: dict) -> tuple[pd.DataFrame, MultipleRandomizedCV]:
     spec : dict
         Workload dictionary with keys ``n_obs``, ``n_assets``, ``n_subsamples``,
         ``asset_subset_size``, ``window_size``, ``train_size``, ``test_size``,
-        and ``seed``. See :data:`SMOKE_MRC` and :data:`FLAGSHIP_MRC`.
+        and ``seed``. See :data:`SMOKE_MRC`.
 
     Returns
     -------

@@ -42,6 +42,7 @@ Runtime:
 - python (>= 3.10)
 - skfolio (>= 1.0, < 2)
 - osqp (>= 1.0, < 2)
+- highspy (>= 1.8)
 
 NumPy, SciPy, Clarabel, pandas, and scikit-learn come from skfolio's own
 runtime stack.

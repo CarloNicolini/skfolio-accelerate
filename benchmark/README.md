@@ -5,8 +5,8 @@ for accelerated MeanRisk cross-validation in skfolio-accelerate. It compares
 `skfolio.model_selection.cross_val_predict` (native) with
 `skfolio_accelerate.cross_val_predict` (`backend="auto"`).
 
-Exploratory scripts under `benchmarks/` remain available; do not treat them as
-the source of truth for regressions.
+Do not treat ad-hoc notebooks or one-off timers as the source of truth for
+regressions.
 
 ## Reference implementation
 
@@ -16,10 +16,10 @@ the source of truth for regressions.
   selected by the library)
 
 MeanRisk configurations are the full grid used by
-`benchmarks/benchmark_sequential_mean_risk.py`: every `ObjectiveFunction` ×
+`benchmark/estimators.py`: every `ObjectiveFunction` ×
 every non-annualized `RiskMeasure` (Gini omitted by default), plus the
-sequential extras, plus boxed LP rows with `l2_coef=0` from
-`benchmarks/benchmark_lp_cv.py`. Annualized measures and Gini are opt-in.
+sequential extras, plus boxed LP rows with `l2_coef=0`. Annualized measures
+and Gini are opt-in.
 
 ## Datasets
 

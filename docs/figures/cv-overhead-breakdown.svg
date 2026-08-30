@@ -55,5 +55,5 @@
   <line x1="50" y1="430" x2="1070" y2="430" stroke="#dce3ef"/>
   <text x="50" y="456" class="note">sklearn validate_data on a DataFrame dominates EqualWeighted.fit. Closed-form skips fit. Random is the same once Dirichlet draws replace 1/n weights.</text>
     <text x="50" y="478" class="note">HRP still has to fit; ndarray views plus assembly cut native 18.5 ms to 10.2 ms (~1.8×), not a compact-solver gain. Standard-deviation MeanRisk now uses sequential CVXPY reuse when the training shape is fixed (see the speedup figures).</text>
-  <text x="50" y="500" class="note">Source: in-process profile on Python 3.12, skfolio 1.0.0; not the isolated benchmark_matrix.py RSS runs.</text>
+  <text x="50" y="500" class="note">Source: in-process profile on Python 3.12, skfolio 1.0.0; not an isolated RSS measurement.</text>
 </svg>

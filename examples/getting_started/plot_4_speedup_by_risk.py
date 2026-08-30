@@ -79,10 +79,13 @@ for label, risk in risks:
 # -------------------------------------------
 # one isolated process on 5,040 × 20 synthetic daily returns
 # (Python 3.12, skfolio 1.0.0, n_jobs=1), as reported in the project README.
+# Variance / semi-variance / max drawdown: compact OSQP / Clarabel table.
+# MAD / CVaR: HiGHS boxed-LP table (current ``backend="auto"``). CPCV MAD is
+# native skfolio, so that bar is omitted (nan).
 published_labels = ["Variance", "Semi-variance", "MAD", "CVaR", "Max drawdown"]
-published_walk_forward = [46.7, 2.29, 2.40, 3.38, 2.11]
-published_mrc = [48.2, 3.05, 3.23, 4.33, 2.62]
-published_cpcv = [10.8, 0.97, 0.85, 1.05, 1.07]
+published_walk_forward = [46.7, 2.29, 6.5, 11.7, 2.11]
+published_mrc = [48.2, 3.05, 6.8, 11.4, 2.62]
+published_cpcv = [10.8, 0.97, float("nan"), 1.3, 1.07]
 
 # %%
 # Plotly: live wall times and published speedup factors
