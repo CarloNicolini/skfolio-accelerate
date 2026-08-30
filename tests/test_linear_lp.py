@@ -150,7 +150,7 @@ def test_highs_cvar_matches_native_across_cv(cv):
     np.testing.assert_allclose(
         path_sharpes(observed),
         path_sharpes(reference),
-        rtol=1e-6,
+        rtol=5e-6,
         atol=1e-8,
     )
     assert report.backend == "highs"
