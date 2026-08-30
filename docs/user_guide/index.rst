@@ -16,13 +16,14 @@ User Guide
 :func:`~skfolio.model_selection.cross_val_predict` workloads by removing
 repeated work that does not change the portfolio problem:
 
+* the CV plan is compiled once; test portfolios are assembled from fold
+  weights (contiguous slices, no joblib, no per-fold ``predict()``) — this
+  applies to every serial :class:`~skfolio.optimization.BaseOptimization`,
+  not only MeanRisk,
 * overlapping empirical moments are updated from sufficient statistics,
 * compact OSQP / HiGHS / Clarabel engines reuse a fixed topology across folds,
 * MeanRisk's own CVXPY graph is reused for the rest of the objective × risk
-  surface when the training shape is fixed,
-* closed-form estimators skip ``fit`` entirely,
-* other serial optimizers still call native ``fit``, then assemble test
-  portfolios from ``weights_``.
+  surface when the training shape is fixed.
 
 The public API is intentionally narrow. Prefer the user guide pages below for
 eligibility rules and the mathematics behind the speedups, then the

@@ -64,13 +64,12 @@ MultipleRandomizedCV, and CombinatorialPurgedCV:
 * other MeanRisk configurations (standard deviation, Ulcer,
   ``MAXIMIZE_RETURN``, risk limits, linear constraints, fees, L1, …) reuse
   skfolio's CVXPY problem when the training shape is fixed;
-* ``MAXIMIZE_RATIO``, transaction costs, custom CVXPY hooks, and MeanRisk
-  subclasses stay on native ``fit`` plus assembly;
-* default :class:`~skfolio.optimization.EqualWeighted`,
-  :class:`~skfolio.optimization.Random`, and default-empirical
-  :class:`~skfolio.optimization.InverseVolatility` use closed-form weights.
+* ``MAXIMIZE_RATIO``, transaction costs, custom CVXPY hooks, MeanRisk
+  subclasses, and every other serial
+  :class:`~skfolio.optimization.BaseOptimization` still call native ``fit``
+  (when there is something to fit) and then use that same compiled plan and
+  weight assembly. Cheap closed-form weights skip ``fit``; the speedup is the
+  shared CV bookkeeping, not a solver.
 
-Other serial :class:`~skfolio.optimization.BaseOptimization` estimators still
-call native ``fit``, then assemble portfolios from ``weights_``. Pipelines,
-``raise_on_failure=False``, parallel ``n_jobs``, and
+Pipelines, ``raise_on_failure=False``, parallel ``n_jobs``, and
 ``entry_rebalancing_params`` use unmodified skfolio.

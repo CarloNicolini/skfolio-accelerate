@@ -27,8 +27,9 @@ What is amortized
 A serial ``cross_val_predict`` call spends most of its time on work that is
 identical, or nearly identical, across folds:
 
-1. **CV bookkeeping** — cloning estimators, slicing DataFrames, wrapping
-   ``n_jobs=1`` in joblib, and constructing ``Portfolio`` objects.
+1. **CV bookkeeping** — cloning estimators, copying train/test frames,
+   wrapping ``n_jobs=1`` in joblib, and constructing ``Portfolio`` objects.
+   This cost is paid by every serial estimator, including cheap ones.
 2. **Empirical moments** — recomputing ``μ`` and ``Σ`` on overlapping training
    windows that share almost all rows with the previous fold.
 3. **Cone / QP construction** — rebuilding a CVXPY graph (and its Clarabel /
@@ -39,13 +40,14 @@ identical, or nearly identical, across folds:
 
 * :func:`~skfolio_accelerate.cv_plan.compile_cv_plan` consumes
   ``splitter.split`` exactly once and stores immutable fold indices.
+  Contiguous training windows stay views rather than advanced-index copies.
 * Sufficient statistics ``(n, s, G)`` update overlapping moments with exact
   rank-k add/drop operations.
 * Compact OSQP / HiGHS / Clarabel engines keep a fixed topology and warm-start
   across folds while ``(n_assets, T)`` stay constant. HiGHS additionally
   restores the previous simplex basis after incremental scenario updates.
-* Test portfolios are assembled from ``weights_``, skipping native
-  ``predict()`` construction on the serial path.
+* Test portfolios are assembled from ``weights_`` for every serial estimator,
+  skipping native ``predict()`` construction.
 
 All reuse is **local to one call**. The package does not keep process-wide
 caches of returns, estimators, or solver workspaces.
@@ -196,18 +198,26 @@ new solver is constructed with the same cone list. Compact eligibility already
 forbids transaction costs, management fees, and a non-zero risk-free rate, so
 those CVXPY terms that appear in skfolio are identically zero here.
 
-Closed-form and fit-assemble paths
-**********************************
+Serial CV assembly
+******************
 
-Default :class:`~skfolio.optimization.EqualWeighted`,
-:class:`~skfolio.optimization.Random`, and default-empirical
-:class:`~skfolio.optimization.InverseVolatility` skip optimization entirely.
-Their speedup is the removal of native CV bookkeeping (joblib, copies,
-``predict()``), not a hidden solver trick.
+After the compiled :class:`~skfolio_accelerate.cv_plan.CVPlan` exists, every
+serial :class:`~skfolio.optimization.BaseOptimization` that does not need a
+compact or Parameterized solver still:
 
-Other serial optimizers (HRP, risk budgeting, ratio objectives, …) still call
-native ``fit``, then assemble test portfolios from ``weights_``. That cuts the
-same per-fold overhead without claiming a compact cone equivalence.
+* walks precomputed train/test indices (contiguous rows become views),
+* skips joblib and native ``safe_split`` copies,
+* builds test :class:`~skfolio.portfolio.Portfolio` objects from fold
+  ``weights_``.
+
+That bookkeeping is the same for Hierarchical Risk Parity, risk budgeting,
+ratio MeanRisk, EqualWeighted, and InverseVolatility. It is a property of
+amortized ``cross_val_predict``, not of those estimators' "optimizers".
+EqualWeighted and default InverseVolatility happen to skip ``fit`` because
+the weights are a closed-form formula; HRP still pays native ``fit`` and then
+uses the same assembly. On small problems the constant per-fold CV cost
+dominates, so cheap estimators show large ratios; those ratios are not a
+solver speedup and do not grow with a heavier cone program.
 
 Assumptions and non-goals
 *************************
@@ -255,9 +265,9 @@ shape and how many overlapping training windows you run:
 * **Scenario risks** still rebuild or update a cone each fold; the same
   workloads are often only a few times faster, and short CPCV grids can be
   ~1×.
-* **Closed-form** estimators look fast on tiny problems because native CV
-  overhead dominates milliseconds of work; the saving is roughly constant per
-  fold, not a multiplicative floor under a heavy CVXPY solve.
+* **Serial assembly** (any estimator that is not a compact/sequential MeanRisk
+  solve) saves a roughly constant per-fold CV cost. When ``fit`` is cheap the
+  ratio looks large; when ``fit`` dominates, expect ~1× plus that constant.
 
 See the gallery examples after the usage tutorials for Plotly figures of
 live and published speedup comparisons, and the project README for the full

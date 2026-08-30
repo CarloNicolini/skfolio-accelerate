@@ -19,15 +19,19 @@ Backends and reports
 
 ``backend="auto"`` selects the first eligible engine:
 
-1. compact OSQP / HiGHS / Clarabel, or closed-form weights,
+1. compact OSQP / HiGHS / Clarabel for boxed MeanRisk,
 2. Parameterized CVXPY reuse for other MeanRisk configurations with a fixed
    training shape (``mu``, returns, and covariance square-root are
    ``cp.Parameter``; skfolio still builds every constraint),
-3. native ``fit`` plus assembly from ``weights_``,
+3. serial assembly from ``weights_`` (native ``fit``, unless the weights are
+   a trivial closed-form formula),
 4. unmodified skfolio.
 
-Ratio homogenization, transaction costs, custom CVXPY hooks, and MeanRisk
-subclasses stay on fit-assemble or native skfolio. Boxed MAD and FLPM on
+The compiled CV plan, contiguous slices, and portfolio assembly in (3) are
+shared by every serial estimator. They are not an EqualWeighted-specific
+optimization. Ratio homogenization, transaction costs, custom CVXPY hooks,
+and MeanRisk subclasses stay on that assembly path or on native skfolio.
+Boxed MAD and FLPM on
 :class:`~skfolio.model_selection.CombinatorialPurgedCV` also use native
 skfolio: a persistent simplex basis does not speed up non-rolling long
 training windows. The call emits :class:`~skfolio_accelerate.AccelerationWarning`.
@@ -43,8 +47,8 @@ Backend names
 ``highs``               Compact scenario LP with persistent HiGHS simplex
 ``clarabel``            Compact scenario QP / SOCP / exponential cone
 ``cvxpy-sequential``    Reuse skfolio's MeanRisk CVXPY problem across folds
-``closed-form``         EqualWeighted, Random, or InverseVolatility weights
-``fit-assemble``        Native ``fit`` + assembly from ``weights_``
+``closed-form``         Trivial weights on the shared serial assembly path
+``fit-assemble``        Native ``fit`` + the same assembly from ``weights_``
 ``sklearn``             Unmodified skfolio ``cross_val_predict``
 ``compact-grid``        Shared compact path inside :func:`grid_search`
 ======================  ============================================================
@@ -52,7 +56,7 @@ Backend names
 Force a policy with the keyword-only ``backend`` argument:
 
 * ``"auto"`` (default) — the order above,
-* ``"compact"`` — require compact / closed-form; raise if ineligible,
+* ``"compact"`` — require compact MeanRisk / trivial-weight assembly; raise if ineligible,
 * ``"cvxpy-sequential"`` — require Parameterized MeanRisk reuse; raise if ineligible,
 * ``"sklearn"`` — always call native skfolio.
 

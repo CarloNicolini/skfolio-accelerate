@@ -24,12 +24,11 @@ The library chooses an engine; the benchmark does not pass engine names.
    graph (`mu`, scenario returns, covariance square-root as `cp.Parameter`)
    for configurations outside the compact subset (risk limits, linear
    constraints, fees, L1, standard deviation, Ulcer, `MAXIMIZE_RETURN`, …).
-5. **fit-assemble** — native `fit` then test portfolios from `weights_`.
+5. **fit-assemble** — native `fit` then the shared serial assembly from
+   `weights_` (compiled plan, views, portfolios). Cheap closed-form
+   estimators are not in this MeanRisk suite.
 6. **sklearn** — unmodified skfolio (`n_jobs != 1`, pipelines, sequential
    `previous_weights`, custom hooks, …).
-
-Closed-form EqualWeighted / Random / InverseVolatility are not part of this
-MeanRisk suite.
 
 ## Solver and tolerances
 

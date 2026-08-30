@@ -32,7 +32,8 @@ Internally a call is compiled once into a CV plan, then executed.
 overlapping training moments are updated from sufficient statistics; compact
 OSQP, HiGHS, or Clarabel engines reuse a fixed problem shape across folds;
 other MeanRisk configurations reuse skfolio's CVXPY problem when the training
-shape is fixed; and test portfolios are assembled from ``weights_``. The
+shape is fixed. Serial estimators that are not in those subsets still share
+the compiled plan and assemble test portfolios from ``weights_``. The
 :ref:`methods` page derives the update formulas and states the assumptions
 that make reuse valid.
 
