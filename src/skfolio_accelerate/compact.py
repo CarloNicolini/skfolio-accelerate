@@ -426,12 +426,6 @@ class StandardDeviationClarabel:
         self.objective = spec.objective
         self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
-        self._P: sp.csc_matrix | None = None
-        self._q: NDArray[np.float64] | None = None
-        self._A: sp.csc_matrix | None = None
-        self._b: NDArray[np.float64] | None = None
-        self._cones: list[Any] | None = None
-        self._scenario_slots: NDArray[np.intp] | None = None
         self.n_warm_starts = 0
         self._build_pattern()
 
@@ -746,6 +740,12 @@ class ScenarioClarabel:
         self.objective = spec.objective
         self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
+        self._P: sp.csc_matrix | None = None
+        self._q: NDArray[np.float64] | None = None
+        self._A: sp.csc_matrix | None = None
+        self._b: NDArray[np.float64] | None = None
+        self._cones: list[Any] | None = None
+        self._scenario_slots: NDArray[np.intp] | None = None
         self.n_warm_starts = 0
 
     def _risk_scale(self) -> float:
