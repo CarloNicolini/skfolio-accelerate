@@ -40,7 +40,6 @@ def test_mad_highs_matches_skfolio_and_reuses_basis():
     w0 = engine.solve(first, warm=False)
     w1 = engine.solve(second, warm=True)
     assert engine.n_warm_starts >= 1
-    assert engine.n_model_passes == 1
     np.testing.assert_allclose(w0.sum(), 1.0, atol=1e-8)
     reference = MeanRisk(risk_measure=RiskMeasure.MEAN_ABSOLUTE_DEVIATION).fit(X[10:50])
     np.testing.assert_allclose(w1, reference.weights_, atol=5e-5)

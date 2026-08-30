@@ -123,7 +123,6 @@ class LinearHighs:
         self._slots = np.zeros((self.n_observations, self.n_assets), dtype=np.float64)
         self._window_to_slot = np.arange(self.n_observations, dtype=np.int32)
         self._built = False
-        self.n_model_passes = 0
         self._cost: NDArray[np.float64]
         self._col_lower: NDArray[np.float64]
         self._col_upper: NDArray[np.float64]
@@ -150,7 +149,6 @@ class LinearHighs:
             RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
             RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
         }:
-            self._scenario_row_offset = 2
             nv = n + 1 + t
             cost = np.zeros(nv, dtype=np.float64)
             coef = 2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0
@@ -193,7 +191,6 @@ class LinearHighs:
             self._mu_nz = mu_nz
             self._r_nz = r_nz
         elif risk is RiskMeasure.CVAR:
-            self._scenario_row_offset = 1
             nv = n + 1 + t
             cost = np.zeros(nv, dtype=np.float64)
             cost[n] = lam
@@ -231,7 +228,6 @@ class LinearHighs:
             self._mu_nz = None
             self._r_nz = r_nz
         elif risk is RiskMeasure.WORST_REALIZATION:
-            self._scenario_row_offset = 1
             nv = n + 1
             cost = np.zeros(nv, dtype=np.float64)
             cost[n] = lam
@@ -294,7 +290,7 @@ class LinearHighs:
 
     def _bind_roll(
         self, returns: NDArray[np.float64], mu: NDArray[np.float64], shift: int
-    ) -> tuple[NDArray[np.int32], NDArray[np.float64]]:
+    ) -> None:
         dropped = self._window_to_slot[:shift]
         new_rows = np.ascontiguousarray(returns[-shift:], dtype=np.float64)
         self._slots[dropped] = new_rows
@@ -303,7 +299,6 @@ class LinearHighs:
             [self._window_to_slot[shift:], dropped]
         ).astype(np.int32, copy=False)
         self._write_mu(mu)
-        return dropped, new_rows
 
     def _bind_objective(self, moments: FoldMoments) -> None:
         if self.spec.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
@@ -330,37 +325,6 @@ class LinearHighs:
         )
         if str(status) != "HighsStatus.kOk":
             raise RuntimeError(f"HiGHS passModel failed: {status}")
-        self.n_model_passes += 1
-
-    def _update_rolling_model(
-        self,
-        slot_indices: NDArray[np.int32],
-        rows: NDArray[np.float64],
-        mu: NDArray[np.float64],
-    ) -> None:
-        for column in range(self.n_assets):
-            for index, slot in enumerate(slot_indices):
-                status = self.solver.changeCoeff(
-                    self._scenario_row_offset + int(slot),
-                    column,
-                    float(rows[index, column]),
-                )
-                if str(status) != "HighsStatus.kOk":
-                    raise RuntimeError(f"HiGHS coefficient update failed: {status}")
-        if self._mu_nz is not None:
-            for column, value in enumerate(mu):
-                status = self.solver.changeCoeff(1, column, -float(value))
-                if str(status) != "HighsStatus.kOk":
-                    raise RuntimeError(f"HiGHS mean update failed: {status}")
-        if self.spec.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
-            columns = np.arange(self.n_assets, dtype=np.int32)
-            status = self.solver.changeColsCost(
-                self.n_assets,
-                columns,
-                self._cost[: self.n_assets],
-            )
-            if str(status) != "HighsStatus.kOk":
-                raise RuntimeError(f"HiGHS objective update failed: {status}")
 
     def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
         returns = np.ascontiguousarray(moments.returns, dtype=np.float64)
@@ -384,14 +348,10 @@ class LinearHighs:
         # CPCV MAD/FLPM never reach here; see continuation_unhelpful_reason.
         if shift is None:
             self._bind_full(returns, mu)
-            rolling_update = None
         else:
-            rolling_update = self._bind_roll(returns, mu, shift)
+            self._bind_roll(returns, mu, shift)
         self._bind_objective(moments)
-        if rolling_update is None or not self._built:
-            self._pass()
-        else:
-            self._update_rolling_model(*rolling_update, mu)
+        self._pass()
         if warm and self._basis is not None:
             self.solver.setBasis(self._basis)
             self.n_warm_starts += 1
