@@ -31,6 +31,8 @@ from skfolio.typing import ArrayLike
 from skfolio.utils.tools import _call_estimator
 from sklearn.base import clone
 
+from skfolio_accelerate.moments import FoldMoments
+
 
 def as_parametric(estimator: MeanRisk) -> ParametricMeanRisk:
     """Copy MeanRisk parameters onto a :class:`ParametricMeanRisk`."""
@@ -198,6 +200,29 @@ class ParametricMeanRisk(MeanRisk):
             if cov_sqrt.diagonal is None:
                 raise RuntimeError("compiled covariance square-root lost its diagonal")
             state.sqrt_diag.value = np.ascontiguousarray(cov_sqrt.diagonal, dtype=float)
+
+    def fit_from_moments(self, moments: FoldMoments) -> bool:
+        """Bind default empirical moments to an existing fixed-shape problem."""
+        distribution = ReturnDistribution(
+            mu=np.asarray(moments.mu, dtype=float),
+            covariance=np.asarray(moments.covariance, dtype=float),
+            returns=np.asarray(moments.returns, dtype=float),
+        )
+        state = self._state()
+        if not self._shapes_match(distribution):
+            return False
+        self._reset()
+        self._bind(distribution)
+        state.n_warm_starts += 1
+        ConvexOptimization._solve_problem(
+            self,
+            problem=state.problem,
+            w=state.w,
+            factor=state.factor,
+            parameters_values=state.parameters_values,
+            expressions=state.expressions,
+        )
+        return True
 
     def _fit_prior(
         self, X: ArrayLike, y: ArrayLike | None, method: str, **fit_params
