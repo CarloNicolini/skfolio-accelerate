@@ -140,6 +140,33 @@ class CVPlan:
         return tuple(tuple(buckets[key]) for key in sorted(buckets))
 
 
+def order_cpcv_folds_by_similarity(
+    folds: tuple[FoldSpec, ...],
+) -> tuple[FoldSpec, ...]:
+    """Greedily order CPCV solves so adjacent training block unions overlap."""
+    if len(folds) < 3:
+        return folds
+    block_sets = [frozenset(fold.train_block_ids) for fold in folds]
+    excluded_sets = [
+        frozenset(int(row) for row in fold.train_excluded_idx) for fold in folds
+    ]
+    ordered = [0]
+    remaining = set(range(1, len(folds)))
+    while remaining:
+        current = ordered[-1]
+        next_index = min(
+            remaining,
+            key=lambda candidate: (
+                len(block_sets[current] ^ block_sets[candidate]),
+                len(excluded_sets[current] ^ excluded_sets[candidate]),
+                candidate,
+            ),
+        )
+        ordered.append(next_index)
+        remaining.remove(next_index)
+    return tuple(folds[index] for index in ordered)
+
+
 def cpcv_fold_blocks(n_samples: int, n_folds: int) -> list[NDArray[np.intp]]:
     """Observation indices belonging to each CPCV fold (same rule as skfolio).
 
