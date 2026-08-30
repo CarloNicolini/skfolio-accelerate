@@ -16,10 +16,7 @@ from sklearn.model_selection import KFold
 
 from skfolio_accelerate import cross_val_predict, grid_search, path_sharpes
 from skfolio_accelerate.compact import estimator_spec, make_compact_engine
-from skfolio_accelerate.cv_plan import (
-    compile_cv_plan,
-    order_cpcv_folds_by_similarity,
-)
+from skfolio_accelerate.cv_plan import compile_cv_plan
 from skfolio_accelerate.flagship import SMOKE_CPCV, SMOKE_MRC, make_cpcv, make_mrc
 from skfolio_accelerate.moments import empirical_from_window, is_default_empirical
 from skfolio_accelerate.predict import blocked_reason
@@ -137,22 +134,6 @@ def test_compile_mrc_records_assets():
     assert plan.folds[0].asset_idx is not None
     assert plan.n_paths == SMOKE_MRC["n_subsamples"]
     assert len(plan.path_batches()) == plan.n_paths
-
-
-def test_cpcv_similarity_order_reduces_training_block_changes():
-    X = synthetic_returns(80, 5, seed=20)
-    cv = CombinatorialPurgedCV(n_folds=4, n_test_folds=2)
-    plan = compile_cv_plan(cv, X)
-    ordered = order_cpcv_folds_by_similarity(plan.folds)
-
-    def total_distance(folds):
-        blocks = [set(fold.train_block_ids) for fold in folds]
-        return sum(
-            len(left ^ right) for left, right in zip(blocks, blocks[1:], strict=False)
-        )
-
-    assert {fold.fold_id for fold in ordered} == {fold.fold_id for fold in plan.folds}
-    assert total_distance(ordered) < total_distance(plan.folds)
 
 
 def test_dataframe_index_is_preserved_on_assembled_portfolios():

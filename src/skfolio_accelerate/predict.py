@@ -54,11 +54,7 @@ from skfolio_accelerate._solvers import (
     solve_sequential_folds,
 )
 from skfolio_accelerate.compact import EngineCache, estimator_spec
-from skfolio_accelerate.cv_plan import (
-    CVPlan,
-    compile_cv_plan,
-    order_cpcv_folds_by_similarity,
-)
+from skfolio_accelerate.cv_plan import CVPlan, compile_cv_plan
 from skfolio_accelerate.linear_lp import continuation_unhelpful_reason
 from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import path_moment_session
@@ -576,9 +572,6 @@ def cross_val_predict(
     if capabilities.can_compact and backend != "cvxpy-sequential":
         spec = estimator_spec(estimator)
         keep_returns = spec.needs_returns()
-        batches = cv_plan.path_batches()
-        if cv_plan.kind == "cpcv":
-            batches = (order_cpcv_folds_by_similarity(batches[0]),)
         # MRC paths have the same number of assets. Reuse one OSQP topology across
         # paths, while deliberately disabling the first warm start of each path.
         # Clarabel workspaces are not shared across paths: there is no supported
@@ -603,7 +596,7 @@ def cross_val_predict(
                         spec,
                         engines=shared_engines,
                     )
-                    for batch in batches
+                    for batch in cv_plan.path_batches()
                 ]
             )
         except (RuntimeError, ValueError) as error:
