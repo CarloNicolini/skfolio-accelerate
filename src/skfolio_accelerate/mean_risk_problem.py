@@ -7,12 +7,16 @@ fold-varying injections:
 
 * expected return (``mu``)
 * scenario returns
-* covariance square-root (variance / standard deviation)
+* covariance square-root (variance / standard deviation), including the
+  low-rank factor form ``CovarianceSqrt(B @ chol(F), diag=sqrt(D))``
 * default minimum acceptable return (``returns - mu``)
 
-Later folds with the same shapes update Parameter values and warm-start.
-Shape changes rebuild. Ratio homogenization, transaction costs, custom CVXPY
-hooks, and MeanRisk subclasses are not handled here.
+The prior (empirical or :class:`~skfolio.prior.TimeSeriesFactorModel`) is
+still fitted on every fold. Later folds with the same shapes update Parameter
+values and warm-start. Factor-named ``linear_constraints`` bake loadings as
+constants, so those configurations rebuild. Shape changes rebuild. Ratio
+homogenization, transaction costs, custom CVXPY hooks, and MeanRisk subclasses
+are not handled here.
 """
 
 from __future__ import annotations
@@ -273,14 +277,29 @@ class ParametricMeanRisk(MeanRisk):
         except Exception:
             state.is_dpp = None
 
+    def _loading_constraints_block_warm_start(
+        self, distribution: ReturnDistribution
+    ) -> bool:
+        """True when linear constraints may bake fold-varying loadings as constants.
+
+        Factor-named exposure constraints inject ``loading_matrix`` into equality /
+        inequality rows. Those rows are not Parameterized today, so a warm start
+        would keep stale exposures. Asset-only constraints are also treated as
+        unsafe whenever a factor model is present (skfolio still passes ``B`` into
+        ``equations_to_matrix``).
+        """
+        return (
+            distribution.factor_model is not None and self.linear_constraints is not None
+        )
+
     def _fit(self, X, y=None, method: str = "fit", **fit_params):
         state = self._state()
         if state.problem is not None:
             distribution = self._fit_prior(X, y, method, **fit_params)
             if (
                 distribution.sample_weight is None
-                and distribution.factor_model is None
                 and self._shapes_match(distribution)
+                and not self._loading_constraints_block_warm_start(distribution)
             ):
                 self._bind(distribution)
                 state.n_warm_starts += 1

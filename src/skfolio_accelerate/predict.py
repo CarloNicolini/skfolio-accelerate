@@ -145,10 +145,11 @@ def _fit_assemble_prediction(
     y_arr,
     cv_plan: CVPlan,
     portfolio_params: dict | None,
+    params: dict | None = None,
 ) -> tuple[Any, FoldBatchResult, float]:
     merged = merge_batch_results(
         [
-            fit_native_weights(estimator, x_arr, y_arr, batch)
+            fit_native_weights(estimator, X, x_arr, y_arr, batch, params=params)
             for batch in cv_plan.path_batches()
         ]
     )
@@ -281,7 +282,7 @@ def _after_solve_failure(
     """Native fit-assemble or skfolio fallback after a compact/sequential failure."""
     if capabilities.can_assemble:
         pred, merged, eval_s = _fit_assemble_prediction(
-            estimator, X, x_arr, y_arr, cv_plan, portfolio_params
+            estimator, X, x_arr, y_arr, cv_plan, portfolio_params, params=params
         )
         report = _report_from_batch(
             "fit-assemble",
@@ -657,6 +658,7 @@ def cross_val_predict(
                         batch,
                         cache=cache,
                         path_id=path_index,
+                        params=params,
                     )
                     for path_index, batch in enumerate(cv_plan.path_batches())
                 ]
@@ -711,6 +713,7 @@ def cross_val_predict(
         y_arr,
         cv_plan,
         portfolio_params,
+        params=params,
     )
     report = _report_from_batch(
         "fit-assemble",

@@ -226,7 +226,11 @@ The compact path is deliberately narrow. It assumes:
 
 * **Default empirical prior.** Sample mean and ``ddof=1`` covariance. Custom
   priors, log-normal projection, investment horizons, rolling ``window_size``,
-  ``assume_centered``, or non-default ``ddof`` force a fallback.
+  ``assume_centered``, or non-default ``ddof`` force a fallback from the
+  compact engines. :class:`~skfolio.prior.TimeSeriesFactorModel` stays on
+  ``cvxpy-sequential`` / fit-assemble when ``params={"factors": ...}`` is
+  provided (see :ref:`backends`); characteristics panels stay on native
+  skfolio.
 * **Nearest-PD projection may be skipped.** Compact ``Σ`` matches
   ``numpy.cov`` before skfolio's optional nearest-PD step. The two coincide
   when the sample covariance is already PD — the intended regime
@@ -239,10 +243,12 @@ The compact path is deliberately narrow. It assumes:
   ``MAXIMIZE_RETURN`` uses its analytic L2 projection. Extra constraints (risk
   limits, linear constraints, fees, L1) and remaining risks reuse skfolio's
   Parameterized CVXPY problem when the training shape is fixed. Ratio
-  objectives stay on fit-assemble.
+  objectives stay on fit-assemble. Factor exposure constraints rebuild the
+  Parameterized problem each fold because loadings are not Parameterized.
 * **Constant problem shape across folds.** Warm starts and cone reuse require
   fixed ``(n_assets, T)`` inside one call. Changing scenario length forces a
-  rebuild.
+  rebuild. Factor priors additionally require a fixed factor count so the
+  low-rank ``covariance_sqrt`` Parameters stay aligned.
 * **Serial execution.** Parallel ``n_jobs``, pipelines, sequential
   ``previous_weights``, ``raise_on_failure=False``, and
   ``entry_rebalancing_params`` stay on unmodified skfolio.
