@@ -17,7 +17,10 @@ from sklearn.base import clone
 from sklearn.model_selection import ParameterGrid
 
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec, estimator_spec
-from skfolio_accelerate.cv_plan import compile_cv_plan
+from skfolio_accelerate.cv_plan import (
+    compile_cv_plan,
+    order_cpcv_folds_by_similarity,
+)
 from skfolio_accelerate.moments import path_moment_session
 from skfolio_accelerate.predict import AccelerationReport, compact_blocked_reason
 from skfolio_accelerate.scoring import (
@@ -163,7 +166,10 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     n_prior_updates = 0
     n_warm_starts = 0
 
-    for path_index, folds in enumerate(cv_plan.path_batches()):
+    batches = cv_plan.path_batches()
+    if cv_plan.kind == "cpcv":
+        batches = (order_cpcv_folds_by_similarity(batches[0]),)
+    for path_index, folds in enumerate(batches):
         if path_index:
             # Clarabel has no explicit cold-start reset. Keep OSQP workspaces
             # across MRC paths, but rebuild scenario engines at path boundaries.
