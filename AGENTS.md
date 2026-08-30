@@ -1,8 +1,7 @@
 # Agent instructions
 
 This repository has a **canonical** MeanRisk `cross_val_predict` benchmark.
-Coding agents must use it instead of ad-hoc timers, notebooks, or the
-exploratory scripts under `benchmarks/`.
+Coding agents must use it instead of ad-hoc timers or notebooks.
 
 ## Relative benchmarking (mandatory)
 
@@ -41,7 +40,7 @@ a PR-vs-main timing baseline. Do not paste those seconds against an older
 
 - Invent or estimate timings.
 - Time `cross_val_predict` in a one-off snippet and treat that as the result.
-- Use `benchmarks/benchmark_*.py` as the source of truth.
+- Treat exploratory notebooks or one-off timers as the source of truth.
 - Upgrade dependencies to make a run look faster.
 - Treat Plotly `historical_speedup` figures as a PR gate.
 

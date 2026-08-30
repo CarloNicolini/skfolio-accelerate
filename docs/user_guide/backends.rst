@@ -6,8 +6,6 @@ Backends and reports
 
 .. currentmodule:: skfolio_accelerate
 
-.. currentmodule:: skfolio_accelerate
-
 .. warning::
 
    **Experimental.** Backend selection and fallback behaviour may evolve.
@@ -55,6 +53,7 @@ Force a policy with the keyword-only ``backend`` argument:
 
 * ``"auto"`` (default) — the order above,
 * ``"compact"`` — require compact / closed-form; raise if ineligible,
+* ``"cvxpy-sequential"`` — require Parameterized MeanRisk reuse; raise if ineligible,
 * ``"sklearn"`` — always call native skfolio.
 
 AccelerationReport

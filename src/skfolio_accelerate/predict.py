@@ -59,24 +59,18 @@ from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import path_moment_session
 from skfolio_accelerate.scoring import assemble_prediction
 
-# Documented public surface (re-exported for stable import paths).
+# Public names for this module. Capability helpers remain importable for
+# diagnostics; solver internals live in ``_solvers``.
 __all__ = [
     "AccelerationReport",
     "AccelerationWarning",
-    "BackendName",
     "CallCapabilities",
-    "FoldBatchResult",
     "assemble_blocked_reason",
     "blocked_reason",
     "classify_call",
-    "closed_form_weights",
     "compact_blocked_reason",
     "cross_val_predict",
-    "fit_native_weights",
-    "merge_batch_results",
     "sequential_blocked_reason",
-    "solve_compact_folds",
-    "solve_sequential_folds",
 ]
 
 

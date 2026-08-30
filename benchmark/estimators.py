@@ -2,29 +2,25 @@
 
 Authoritative set
 -----------------
-``benchmarks/benchmark_sequential_mean_risk.py`` times native
+``mean_risk_specs`` times native
 ``skfolio.model_selection.cross_val_predict`` against ``backend="auto"`` for:
 
 * every :class:`~skfolio.optimization.ObjectiveFunction` × every
   **non-annualized** :class:`~skfolio.RiskMeasure` (Gini omitted by default);
 * extras: variance ``min_return``, named ``linear_constraints``,
   ``management_fees``, ``l1_coef``, and CVaR ``min_return``.
+* boxed LPs with ``l2_coef=0`` (MAD, FLPM, CVaR, worst realization) so HiGHS
+  is eligible (``include_lp_l2_zero``).
 
-``benchmarks/benchmark_coverage.py`` additionally constructs
-``MeanRisk(risk_measure=risk)`` for **every** ``RiskMeasure`` including
-annualized aliases, default objective only.
-
-``benchmarks/benchmark_lp_cv.py`` times boxed LPs with ``l2_coef=0``
-(MAD, FLPM, CVaR, worst realization) so HiGHS is eligible.
+Annualized aliases are optional via ``--include-annualized``.
 
 This suite includes the sequential grid + extras by default, the LP ``l2=0``
-rows (``include_lp_l2_zero``), and optional annualized / Gini flags. It does
+rows, and optional annualized / Gini flags. It does
 not subsample “representative” risks from that grid.
 
 Ambiguity
 ---------
-Annualized measures are not in the sequential script (filtered by
-``not risk.is_annualized``). Enable them with ``--include-annualized``.
+Annualized measures are opt-in (``--include-annualized``).
 Gini is a ~20-minute LP per fold on year-long windows; enable with
 ``--include-gini``. Linear-constraint extras use the first asset column name
 at runtime so they are valid on S&P 500 tickers as well as synthetic ``A0``.
@@ -41,7 +37,7 @@ from skfolio.optimization import MeanRisk, ObjectiveFunction
 
 from benchmark.config import BenchmarkConfig
 
-# Same skip as benchmarks/benchmark_sequential_mean_risk.py.
+# Same skip as the default MeanRisk grid (Gini is opt-in).
 SKIP_GINI = {RiskMeasure.GINI_MEAN_DIFFERENCE}
 
 LP_L2_ZERO_RISKS = (

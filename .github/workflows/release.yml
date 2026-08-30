@@ -31,8 +31,8 @@ jobs:
           python -m pip install -e ".[dev]" build ruff twine
       - name: Verify source
         run: |
-          ruff check src tests benchmarks examples
-          ruff format --check src tests benchmarks examples
+          ruff check src tests benchmark examples
+          ruff format --check src tests benchmark examples
           pytest
       - name: Build distributions
         run: |

@@ -116,7 +116,7 @@ class CallCapabilities:
     """What this ``cross_val_predict`` call is allowed to skip.
 
     ``compact_reason``, ``sequential_reason``, and ``assemble_reason`` are
-    independent. Auto uses compact OSQP/Clarabel when possible, otherwise
+    independent. Auto uses compact OSQP/HiGHS/Clarabel when possible, otherwise
     Parameterized MeanRisk reuse, otherwise fit-assemble, otherwise skfolio.
     """
 
@@ -147,7 +147,7 @@ class CallCapabilities:
         Returns
         -------
         backend : str
-            Compact OSQP/Clarabel, sequential CVXPY, fit-assemble, or sklearn.
+            Compact OSQP/HiGHS/Clarabel, sequential CVXPY, fit-assemble, or sklearn.
         """
         if self.can_compact:
             if type(estimator) in _CLOSED_FORM_TYPES:
@@ -292,6 +292,7 @@ def compact_blocked_reason(
     params: dict | None = None,
     column_indices=None,
     entry_rebalancing_params: dict | None = None,
+    n_jobs: int | None = None,
     cv=None,
 ) -> str | None:
     """Why this call cannot use the compact engine."""
@@ -302,6 +303,7 @@ def compact_blocked_reason(
         column_indices=column_indices,
         entry_rebalancing_params=entry_rebalancing_params,
         cv=cv,
+        n_jobs=n_jobs,
         verb="compacted",
     ):
         return reason
@@ -410,7 +412,7 @@ def classify_call(
         cv=cv,
     )
     return CallCapabilities(
-        compact_reason=compact_blocked_reason(estimator, y=y, **call_kw),
+        compact_reason=compact_blocked_reason(estimator, y=y, n_jobs=n_jobs, **call_kw),
         assemble_reason=assemble_blocked_reason(estimator, n_jobs=n_jobs, **call_kw),
         sequential_reason=sequential_blocked_reason(
             estimator, n_jobs=n_jobs, **call_kw

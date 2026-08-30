@@ -262,6 +262,17 @@ def test_parallel_n_jobs_keeps_native_fallback():
     _assert_same_paths(pred, ref)
     assert report.backend == "sklearn"
 
+    compact, compact_report = cross_val_predict(
+        MeanRisk(),
+        X,
+        cv=cv,
+        n_jobs=-1,
+        return_report=True,
+    )
+    compact_ref = skfolio_cv_predict(MeanRisk(), X, cv=cv, n_jobs=1)
+    _assert_same_paths(compact, compact_ref)
+    assert compact_report.backend == "sklearn"
+
 
 def test_transaction_costs_use_native_skfolio():
     X = synthetic_returns(72, 4, seed=36)

@@ -130,9 +130,6 @@ python benchmark/run_benchmark.py --dataset synthetic
 python benchmark/run_benchmark.py --dataset sp500
 ```
 
-The scripts in `benchmarks/` are exploratory / README-figure sources. Prefer
-`benchmark/` for performance and numerical regressions.
-
 `backend="auto"` is measured on every non-annualized `ObjectiveFunction` ×
 `RiskMeasure` pair, plus a few extra MeanRisk options, across three CV
 protocols. The large multiplicative win is still **boxed variance with many
@@ -140,6 +137,16 @@ overlapping OSQP folds**. Sequential reuse is about **2×** on those same
 WalkForward / MRC windows. A six-solve CPCV on the same 20-year sample is
 near **1×**, and sequential Ulcer / exponential-cone graphs can be slower than
 native when the training length changes.
+
+The tables below are **representative medians from one 20-year host**. They
+are not a PR timing baseline; coding agents must use in-run
+`benchmark/run_relative.py` (see [`AGENTS.md`](AGENTS.md)).
+
+Engine labels in the first two tables follow the compact Clarabel path that
+was `auto` for scenario risks in that sweep. Boxed LPs (`l2_coef=0`) now
+select persistent HiGHS on WalkForward / MRC; CombinatorialPurgedCV MAD and
+FLPM use native skfolio. The HiGHS subsection is the current boxed-LP
+picture. Do not mix these rows with a `results.csv` from another machine.
 
 ![Representative 20-year workload speedups](docs/figures/long-workload-speedups.svg)
 
@@ -207,9 +214,8 @@ that motivated the native fallback.
 | CVaR | 11.7× | 11.4× | 1.3× | HiGHS |
 | Worst realization | 12.6× | 13.5× | 3.6× | HiGHS |
 
-Mean path Sharpe matched native (typical Δ ~ 1e-6). CSV:
-`benchmarks/lp_cv_speedups_20y.csv`. Scripts:
-`experiments/parametric_lp_cv.py`, `benchmarks/benchmark_lp_cv.py`.
+Mean path Sharpe matched native (typical Δ ~ 1e-6). Reproduce with
+`python benchmark/run_benchmark.py` (`include_lp_l2_zero` is on by default).
 
 On the small 120 × 6 suite every fold still pays CVXPY setup, so compact
 scenario risks look closer to variance. That ratio does not survive once the
@@ -268,7 +274,8 @@ Reproducibility and relative speedup are enforced by using the provided `benchma
 
 ## Documentation
 
-To build the documentation make sure to have everything installed.
+See [`CHANGELOG.md`](CHANGELOG.md) for the 0.1.0 surface. To build the Sphinx
+site:
 
 ```bash
 pip install -e ".[docs]"
@@ -280,7 +287,7 @@ Then open `docs/_build/html/index.html` in your browser.
 ## Developer installation
 
 The package targets `skfolio>=1.0.0` and I don't plan support for older versions because of substantial API changes.
-Its only additional runtime dependency is `OSQP` and `HiGHS`.
+Runtime extras beyond skfolio are OSQP and HiGHS (`osqp`, `highspy`).
 
 ```bash
 uv sync --extra dev

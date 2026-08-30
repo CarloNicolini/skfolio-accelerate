@@ -95,5 +95,5 @@
   <text x="50" y="716" class="note">Amortized engines stay serial (warm starts / Parameter reuse). native n_jobs=-1 on skfolio_accelerate.cross_val_predict selects unmodified skfolio, not compact/sequential.</text>
   <text x="50" y="738" class="note">4-core native is ~3.4–3.7× vs serial native on MRC. Serial OSQP still wins 13× against that. Serial Clarabel only ties or slightly beats MRC; 45 independent CVaR cones prefer joblib.</text>
   <text x="50" y="760" class="note">Sequential std and MAXIMIZE_RATIO lose to 4-core native (~0.3–0.7×). Six-solve CPCV is too small for joblib; see the table for WalkForward and CPCV-6.</text>
-  <text x="50" y="782" class="note">Source: benchmarks/benchmark_parallel_cv.py · 4 CPUs · solver thread caps=1 · seed 42 · Python 3.12, skfolio 1.0.0.</text>
+  <text x="50" y="782" class="note">Source: 4-core parallel vs serial comparison · solver thread caps=1 · seed 42 · Python 3.12, skfolio 1.0.0. See README.</text>
 </svg>

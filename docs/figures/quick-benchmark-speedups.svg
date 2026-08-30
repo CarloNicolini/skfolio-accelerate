@@ -79,7 +79,7 @@
   <line x1="50" y1="555" x2="1070" y2="555" stroke="#dce3ef"/>
   <text x="50" y="582" class="note">Sequential covers std, Ulcer, MAXIMIZE_RETURN, risk limits, linear constraints, fees, and L1. MAXIMIZE_RATIO stays on fit-assemble (no homogenization proxy).</text>
   <text x="50" y="604" class="note">Closed-form EqualWeighted / Random / InverseVolatility is the isolated compact-suite median (not re-timed here). Red bars would be slowdowns versus native; none appear on this small suite geometric mean.</text>
-  <text x="50" y="626" class="note">Source: benchmarks/benchmark_sequential_mean_risk.py --quick; WalkForward, MultipleRandomizedCV, CombinatorialPurgedCV. Python 3.12, skfolio 1.0.0.</text>
+  <text x="50" y="626" class="note">Source: benchmark/run_benchmark.py --quick; WalkForward, MultipleRandomizedCV, CombinatorialPurgedCV. Python 3.12, skfolio 1.0.0.</text>
   <text x="50" y="648" class="note">This small suite still charges every fold a CVXPY setup cost, so compact Clarabel looks closer to OSQP than on 20-year WalkForward/MRC.</text>
   <text x="50" y="670" class="note">MRC extras (min_return, named linear constraints) are skipped: asset subsets drop column names, and min_return can be infeasible on random 12-asset windows.</text>
 </svg>

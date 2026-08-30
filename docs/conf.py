@@ -106,7 +106,6 @@ sphinx_gallery_conf = {
     "examples_dirs": ["../examples/getting_started"],
     "gallery_dirs": ["auto_examples"],
     "filename_pattern": r"/plot_",
-    "ignore_pattern": r"massive_path_predict\.py",
     "download_all_examples": False,
     "plot_gallery": True,
     "remove_config_comments": True,
