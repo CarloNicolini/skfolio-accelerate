@@ -5,11 +5,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 from skfolio import RiskMeasure
-from skfolio.model_selection import CombinatorialPurgedCV, WalkForward
+from skfolio.model_selection import (
+    CombinatorialPurgedCV,
+    MultipleRandomizedCV,
+    WalkForward,
+)
+from skfolio.model_selection import cross_val_predict as skfolio_cv_predict
 from skfolio.optimization import MeanRisk
 from sklearn.model_selection import KFold
 
-from skfolio_accelerate import AccelerationWarning, cross_val_predict
+from skfolio_accelerate import AccelerationWarning, cross_val_predict, path_sharpes
 from skfolio_accelerate.compact import estimator_spec, make_compact_engine
 from skfolio_accelerate.linear_lp import LinearHighs, rolling_shift
 from skfolio_accelerate.moments import empirical_from_window
@@ -35,6 +40,7 @@ def test_mad_highs_matches_skfolio_and_reuses_basis():
     w0 = engine.solve(first, warm=False)
     w1 = engine.solve(second, warm=True)
     assert engine.n_warm_starts >= 1
+    assert engine.n_model_passes == 1
     np.testing.assert_allclose(w0.sum(), 1.0, atol=1e-8)
     reference = MeanRisk(risk_measure=RiskMeasure.MEAN_ABSOLUTE_DEVIATION).fit(X[10:50])
     np.testing.assert_allclose(w1, reference.weights_, atol=5e-5)
@@ -105,5 +111,46 @@ def test_cpcv_cvar_stays_on_highs():
         cv=cv,
         n_jobs=1,
         return_report=True,
+    )
+    assert report.backend == "highs"
+
+
+@pytest.mark.parametrize(
+    "cv",
+    [
+        WalkForward(train_size=36, test_size=12),
+        MultipleRandomizedCV(
+            walk_forward=WalkForward(train_size=36, test_size=12),
+            n_subsamples=2,
+            asset_subset_size=4,
+            window_size=72,
+            random_state=14,
+        ),
+        CombinatorialPurgedCV(
+            n_folds=4,
+            n_test_folds=2,
+            purged_size=1,
+            embargo_size=1,
+        ),
+    ],
+    ids=["walk-forward", "multiple-randomized", "purged-cpcv"],
+)
+def test_highs_cvar_matches_native_across_cv(cv):
+    X = synthetic_returns(96, 6, seed=15)
+    estimator = MeanRisk(risk_measure=RiskMeasure.CVAR)
+    reference = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
+    observed, report = cross_val_predict(
+        estimator,
+        X,
+        cv=cv,
+        n_jobs=1,
+        return_report=True,
+    )
+
+    np.testing.assert_allclose(
+        path_sharpes(observed),
+        path_sharpes(reference),
+        rtol=1e-6,
+        atol=1e-8,
     )
     assert report.backend == "highs"
