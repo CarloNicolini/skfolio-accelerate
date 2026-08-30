@@ -46,3 +46,15 @@ Runtime:
 
 NumPy, SciPy, Clarabel, pandas, and scikit-learn come from skfolio's own
 runtime stack.
+
+Optional COSMO.rs backend
+*************************
+
+The experimental persistent COSMO path needs a native build of
+`COSMO.rs <https://github.com/CarloNicolini/COSMO.rs>`_::
+
+    $ pip install -e ".[cosmo]"
+    # or: clone COSMO.rs and `maturin develop --release --features python`
+
+Then pass ``backend="cosmo"`` or ``MeanRisk(solver="COSMO")``. See
+:ref:`cosmo`.

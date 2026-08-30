@@ -39,3 +39,4 @@ eligibility rules and the mathematics behind the speedups, then the
     Moments and CV plans <moments_and_plans>
     Hyperparameter search <grid_search>
     Ranking checks <ranking>
+    Persistent COSMO.rs (experimental) <cosmo>

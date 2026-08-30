@@ -132,3 +132,25 @@ Functions
     :template: function.rst
 
     compile_cv_plan
+
+.. _cosmo_ref:
+
+:mod:`skfolio_accelerate.cosmo`: Persistent COSMO.rs helpers
+============================================================
+
+.. automodule:: skfolio_accelerate.cosmo
+    :no-members:
+    :no-inherited-members:
+
+.. currentmodule:: skfolio_accelerate.cosmo
+
+.. autosummary::
+    :toctree: generated/
+    :template: function.rst
+
+    cosmo_available
+    cosmo_persistence_api_available
+    make_cosmo_engine
+    normalize_persist_mode
+    formulation_table
+    to_markdown

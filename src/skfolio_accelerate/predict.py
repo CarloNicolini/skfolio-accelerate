@@ -24,7 +24,7 @@ import copy
 import os
 import time
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -164,6 +164,14 @@ def _fit_assemble_prediction(
     return pred, merged, time.perf_counter() - started
 
 
+def _native_solver_estimator(estimator):
+    """Rewrite COSMO solver names so a native fallback can still run."""
+    solver = str(getattr(estimator, "solver", "") or "")
+    if solver.upper() in {"COSMO", "COSMO_RS", "COSMO_RUST"}:
+        return clone(estimator).set_params(solver="CLARABEL")
+    return estimator
+
+
 def _skfolio_predict(
     estimator,
     X,
@@ -205,6 +213,8 @@ def _choice_reason(backend: str, capabilities: CallCapabilities) -> str:
             return "boxed MeanRisk scenario risk; compact Clarabel"
         case "max-return":
             return "boxed maximum-return MeanRisk; analytic L2 projection"
+        case "cosmo":
+            return "boxed MeanRisk; persistent COSMO.rs ADMM"
         case "closed-form":
             return "trivial weights; shared serial CV assembly"
         case "cvxpy-sequential":
@@ -281,7 +291,12 @@ def _after_solve_failure(
     """Native fit-assemble or skfolio fallback after a compact/sequential failure."""
     if capabilities.can_assemble:
         pred, merged, eval_s = _fit_assemble_prediction(
-            estimator, X, x_arr, y_arr, cv_plan, portfolio_params
+            _native_solver_estimator(estimator),
+            X,
+            x_arr,
+            y_arr,
+            cv_plan,
+            portfolio_params,
         )
         report = _report_from_batch(
             "fit-assemble",
@@ -293,7 +308,7 @@ def _after_solve_failure(
         )
         return pred, report
     pred = _skfolio_predict(
-        estimator,
+        _native_solver_estimator(estimator),
         X,
         y,
         fallback_cv,
@@ -414,10 +429,13 @@ def cross_val_predict(
     entry_rebalancing_params : dict, optional
         Entry-rebalancing metadata. Disables amortization when set.
 
-    backend : {"auto", "compact", "cvxpy-sequential", "sklearn"}, default="auto"
-        Execution policy. ``"auto"`` selects a compact solver, sequential
-        CVXPY, serial assembly from ``weights_``, or skfolio. The other values
-        are test/debug overrides.
+    backend : str, default="auto"
+        One of ``"auto"``, ``"compact"``, ``"cvxpy-sequential"``,
+        ``"sklearn"``, or ``"cosmo"``. ``"auto"`` selects a compact solver,
+        sequential CVXPY, serial assembly from ``weights_``, or skfolio.
+        ``"cosmo"`` forces the optional persistent COSMO.rs compact engine
+        (not selected by ``"auto"``). The other values are test/debug
+        overrides.
 
     return_report : bool, default=False
         If ``True``, also return an :class:`AccelerationReport`.
@@ -434,8 +452,8 @@ def cross_val_predict(
     Raises
     ------
     ValueError
-        If ``backend`` is unknown, or ``backend="compact"`` is requested for an
-        ineligible estimator / call.
+        If ``backend`` is unknown, or ``backend="compact"`` / ``"cosmo"`` is
+        requested for an ineligible estimator / call.
 
     Notes
     -----
@@ -465,8 +483,23 @@ def cross_val_predict(
     """
     _cap_native_threads()
     t_wall = time.perf_counter()
-    if backend not in {"auto", "compact", "cvxpy-sequential", "sklearn"}:
+    if backend not in {"auto", "compact", "cvxpy-sequential", "sklearn", "cosmo"}:
         raise ValueError(f"Unknown backend {backend!r}")
+    if backend == "cosmo":
+        from skfolio_accelerate._cosmo import (
+            cosmo_available,
+            cosmo_cv_blocked_reason,
+        )
+
+        if not cosmo_available():
+            raise ImportError(
+                "backend='cosmo' requires COSMO.rs. Install the optional extra "
+                "skfolio-accelerate[cosmo] or build "
+                "https://github.com/CarloNicolini/COSMO.rs with maturin."
+            )
+        risk = getattr(estimator, "risk_measure", None)
+        if reason := cosmo_cv_blocked_reason(risk):
+            raise ValueError(reason)
 
     capabilities = classify_call(
         estimator,
@@ -498,7 +531,7 @@ def cross_val_predict(
         and not capabilities.can_assemble
     ):
         pred = _skfolio_predict(
-            estimator,
+            _native_solver_estimator(estimator),
             X,
             y,
             cv,
@@ -526,11 +559,13 @@ def cross_val_predict(
             wall_s=time.perf_counter() - t_wall,
         )
         return (pred, report) if return_report else pred
-    if backend == "compact" and not capabilities.can_compact:
+    if backend in {"compact", "cosmo"} and not capabilities.can_compact:
         raise ValueError(
             f"backend={backend!r} cannot compact this predict: "
             f"{capabilities.compact_reason}"
         )
+    if backend == "cosmo" and type(estimator) in _CLOSED_FORM_TYPES:
+        raise ValueError("backend='cosmo' requires a compact MeanRisk estimator")
 
     estimator = clone(estimator)
     x_arr = np.ascontiguousarray(X, dtype=np.float64)
@@ -571,14 +606,21 @@ def cross_val_predict(
 
     if capabilities.can_compact and backend != "cvxpy-sequential":
         spec = estimator_spec(estimator)
+        if backend == "cosmo":
+            spec = replace(spec, solver="COSMO")
         keep_returns = spec.needs_returns()
         # MRC paths have the same number of assets. Reuse one OSQP topology across
         # paths, while deliberately disabling the first warm start of each path.
         # Clarabel workspaces are not shared across paths: there is no supported
         # cold-start reset, so a leftover interior point can leak between subsets.
+        # COSMO workspaces are also path-local (different asset subsets / ADMM state).
         shared_engines = (
             EngineCache(spec=spec)
-            if cv_plan.kind == "mrc" and not spec.needs_returns()
+            if (
+                cv_plan.kind == "mrc"
+                and not spec.needs_returns()
+                and not spec.uses_cosmo()
+            )
             else None
         )
         try:
@@ -599,7 +641,7 @@ def cross_val_predict(
                     for batch in cv_plan.path_batches()
                 ]
             )
-        except (RuntimeError, ValueError) as error:
+        except (RuntimeError, ValueError, ImportError) as error:
             fail_reason = (
                 f"compact {spec.risk_measure.name} solve failed: "
                 f"{type(error).__name__}: {error}"
@@ -634,7 +676,9 @@ def cross_val_predict(
             name=type(estimator).__name__,
             portfolio_params=portfolio_params,
         )
-        backend_name: BackendName = _compact_backend_name(estimator)
+        backend_name: BackendName = (
+            "cosmo" if spec.uses_cosmo() else _compact_backend_name(estimator)
+        )
         report = _report_from_batch(
             backend_name,
             merged,
@@ -645,12 +689,12 @@ def cross_val_predict(
         return (pred, report) if return_report else pred
 
     if capabilities.can_sequential:
-        cache = SequentialProblemCache(estimator)
+        cache = SequentialProblemCache(_native_solver_estimator(estimator))
         try:
             merged = merge_batch_results(
                 [
                     solve_sequential_folds(
-                        estimator,
+                        _native_solver_estimator(estimator),
                         X,
                         x_arr,
                         y_arr,
@@ -705,7 +749,7 @@ def cross_val_predict(
         return (pred, report) if return_report else pred
 
     pred, merged, eval_s = _fit_assemble_prediction(
-        estimator,
+        _native_solver_estimator(estimator),
         X,
         x_arr,
         y_arr,

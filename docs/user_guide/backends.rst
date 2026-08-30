@@ -37,6 +37,9 @@ skfolio: a persistent simplex basis does not speed up non-rolling long
 training windows. The call emits :class:`~skfolio_accelerate.AccelerationWarning`.
 You do not pass an engine name in application code.
 
+``backend="cosmo"`` is an **opt-in** experimental override for the persistent
+COSMO.rs compact engines. It is never selected by ``"auto"``. See :ref:`cosmo`.
+
 Backend names
 *************
 
@@ -47,6 +50,7 @@ Backend names
 ``osqp``                Compact mean-variance QP
 ``highs``               Compact scenario LP with persistent HiGHS simplex
 ``clarabel``            Compact standard-deviation / scenario cone problem
+``cosmo``               Optional persistent COSMO.rs ADMM (opt-in only)
 ``cvxpy-sequential``    Reuse skfolio's MeanRisk CVXPY problem across folds
 ``closed-form``         Trivial weights on the shared serial assembly path
 ``fit-assemble``        Native ``fit`` + the same assembly from ``weights_``
@@ -56,9 +60,10 @@ Backend names
 
 Force a policy with the keyword-only ``backend`` argument:
 
-* ``"auto"`` (default) — the order above,
+* ``"auto"`` (default) — the order above (never selects ``cosmo``),
 * ``"compact"`` — require compact MeanRisk / trivial-weight assembly; raise if ineligible,
 * ``"cvxpy-sequential"`` — require Parameterized MeanRisk reuse; raise if ineligible,
+* ``"cosmo"`` — force persistent COSMO.rs; raise if ineligible or unavailable,
 * ``"sklearn"`` — always call native skfolio.
 
 AccelerationReport

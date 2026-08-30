@@ -34,6 +34,7 @@ BackendName = Literal[
     "highs",
     "clarabel",
     "max-return",
+    "cosmo",
     "cvxpy-sequential",
     "closed-form",
     "fit-assemble",
@@ -168,9 +169,13 @@ def _nonzero(value: Any) -> bool:
 
 
 def _compact_backend_name(estimator) -> BackendName:
-    """OSQP, HiGHS, or Clarabel for a compact-eligible estimator."""
+    """OSQP, HiGHS, Clarabel, max-return, or COSMO for a compact estimator."""
     if type(estimator) in _CLOSED_FORM_TYPES:
         return "closed-form"
+    from skfolio_accelerate._cosmo import uses_cosmo_solver
+
+    if uses_cosmo_solver(estimator):
+        return "cosmo"
     if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RETURN:
         return "max-return"
     if estimator.risk_measure is RiskMeasure.VARIANCE:
@@ -219,14 +224,30 @@ def _mean_risk_compact_blocked(estimator: MeanRisk) -> str | None:
         and risk not in _SUPPORTED_RISKS
     ):
         return "risk_measure is not compacted"
-    allowed = (
-        {"CLARABEL", "OSQP"}
-        if risk is RiskMeasure.VARIANCE
-        and estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
-        else {"CLARABEL"}
-    )
-    if estimator.solver not in allowed:
-        return f"solver {estimator.solver!r} is not compacted for {risk.name}"
+    solver_name = str(estimator.solver or "")
+    if solver_name.upper() in {"COSMO", "COSMO_RS", "COSMO_RUST"}:
+        from skfolio_accelerate._cosmo import (
+            cosmo_available,
+            cosmo_cv_blocked_reason,
+        )
+
+        if not cosmo_available():
+            return "COSMO.rs is not installed"
+        if reason := cosmo_cv_blocked_reason(risk):
+            return reason
+        if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RETURN:
+            return "COSMO compact path does not cover analytic maximum-return"
+        if risk is RiskMeasure.STANDARD_DEVIATION:
+            return "COSMO compact path does not cover standard deviation yet"
+    else:
+        allowed = (
+            {"CLARABEL", "OSQP"}
+            if risk is RiskMeasure.VARIANCE
+            and estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
+            else {"CLARABEL"}
+        )
+        if estimator.solver not in allowed:
+            return f"solver {estimator.solver!r} is not compacted for {risk.name}"
     if _nonzero(estimator.l1_coef):
         return "l1_coef is not compacted"
     if type(estimator.min_weights) is dict or type(estimator.max_weights) is dict:
