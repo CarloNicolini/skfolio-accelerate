@@ -426,6 +426,12 @@ class StandardDeviationClarabel:
         self.objective = spec.objective
         self.risk_aversion = float(spec.risk_aversion)
         self.solver: clarabel.DefaultSolver | None = None
+        self._P: sp.csc_matrix | None = None
+        self._q: NDArray[np.float64] | None = None
+        self._A: sp.csc_matrix | None = None
+        self._b: NDArray[np.float64] | None = None
+        self._cones: list[Any] | None = None
+        self._scenario_slots: NDArray[np.intp] | None = None
         self.n_warm_starts = 0
         self._build_pattern()
 
@@ -1071,14 +1077,73 @@ class ScenarioClarabel:
             return self._exponential_problem(moments, drawdown=False)
         return self._linear_problem(moments)
 
+    def _scenario_binding(
+        self, moments: FoldMoments
+    ) -> tuple[NDArray[np.intp], NDArray[np.float64]]:
+        risk = self.spec.risk_measure
+        n = self.n_assets
+        t = self.n_observations
+        if risk in {
+            RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+            RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        }:
+            rows = 1 + 2 * n + t + np.arange(t, dtype=np.intp)
+            values = -_scenario_deviations(moments, self.spec.min_acceptable_return)
+        elif risk is RiskMeasure.WORST_REALIZATION:
+            rows = 1 + 2 * n + np.arange(t, dtype=np.intp)
+            values = -np.asarray(moments.returns, dtype=np.float64)
+        elif risk in {RiskMeasure.SEMI_VARIANCE, RiskMeasure.SEMI_DEVIATION}:
+            rows = 1 + 2 * n + 2 * np.arange(t, dtype=np.intp) + 1
+            values = -_scenario_deviations(moments, self.spec.min_acceptable_return)
+        elif risk is RiskMeasure.EVAR:
+            rows = 2 + 2 * n + 3 * np.arange(t, dtype=np.intp)
+            values = np.asarray(moments.returns, dtype=np.float64)
+        else:
+            rows = 2 + 2 * n + 2 * np.arange(t, dtype=np.intp) + 1
+            values = -np.asarray(moments.returns, dtype=np.float64)
+        return rows, values
+
+    def _compile(self, moments: FoldMoments) -> None:
+        self._P, self._q, self._A, self._b, self._cones = self._problem(moments)
+        rows, _ = self._scenario_binding(moments)
+        slots = np.empty((self.n_observations, self.n_assets), dtype=np.intp)
+        for column in range(self.n_assets):
+            start = int(self._A.indptr[column])
+            stop = int(self._A.indptr[column + 1])
+            column_rows = self._A.indices[start:stop]
+            positions = np.searchsorted(column_rows, rows)
+            if np.any(positions == column_rows.size) or np.any(
+                column_rows[positions] != rows
+            ):
+                raise RuntimeError("ScenarioClarabel sparse pattern is incomplete")
+            slots[:, column] = start + positions
+        self._scenario_slots = slots
+
+    def _bind(self, moments: FoldMoments) -> None:
+        if self._A is None:
+            self._compile(moments)
+        rows, values = self._scenario_binding(moments)
+        del rows
+        self._A.data[self._scenario_slots] = values
+        self._q[: self.n_assets] = 0.0
+        self._weight_objective(self._q, moments)
+
     def solve(self, moments: FoldMoments, *, warm: bool = True) -> NDArray[np.float64]:
         t = int(moments.n_observations)
         if t != self.n_observations:
             self.n_observations = t
             self.solver = None
-        P, q, A, b, cones = self._problem(moments)
+            self._P = self._q = self._A = self._b = self._cones = None
+            self._scenario_slots = None
+        self._bind(moments)
         self.solver, updated = _clarabel_try_update(
-            self.solver, P, q, A, b, cones, update={"q": q, "A": A, "b": b}
+            self.solver,
+            self._P,
+            self._q,
+            self._A,
+            self._b,
+            self._cones,
+            update={"q": self._q, "A": self._A},
         )
         if updated and warm:
             self.n_warm_starts += 1

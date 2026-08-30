@@ -172,6 +172,52 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
     assert np.max(observed) <= 0.6 + 2e-7
 
 
+@pytest.mark.parametrize(
+    "risk_measure",
+    [
+        RiskMeasure.SEMI_VARIANCE,
+        RiskMeasure.SEMI_DEVIATION,
+        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        RiskMeasure.WORST_REALIZATION,
+        RiskMeasure.EVAR,
+        RiskMeasure.MAX_DRAWDOWN,
+        RiskMeasure.AVERAGE_DRAWDOWN,
+        RiskMeasure.CDAR,
+        RiskMeasure.EDAR,
+    ],
+)
+def test_scenario_clarabel_reuses_compiled_sparse_pattern(monkeypatch, risk_measure):
+    first = synthetic_returns(80, 5, seed=96)
+    second = synthetic_returns(80, 5, seed=97)
+    estimator = MeanRisk(risk_measure=risk_measure, l2_coef=1e-5)
+    engine = make_compact_engine(
+        estimator_spec(estimator),
+        n_assets=first.shape[1],
+        n_observations=first.shape[0],
+    )
+    engine.solve(empirical_from_window(first, keep_returns=True), warm=False)
+    matrix_id = id(engine._A)
+    data_id = id(engine._A.data)
+
+    monkeypatch.setattr(
+        engine,
+        "_problem",
+        lambda moments: pytest.fail("sparse problem was rebuilt"),
+    )
+    observed = engine.solve(
+        empirical_from_window(second, keep_returns=True),
+        warm=True,
+    )
+    reference = estimator.fit(second).weights_
+
+    tolerance = 2e-4 if risk_measure in {RiskMeasure.EVAR, RiskMeasure.EDAR} else 2e-5
+    np.testing.assert_allclose(observed, reference, rtol=0, atol=tolerance)
+    assert id(engine._A) == matrix_id
+    assert id(engine._A.data) == data_id
+    assert engine.n_warm_starts == 1
+
+
 @pytest.mark.parametrize("l2_coef", [0.0, 1e-5, 0.1])
 def test_analytic_max_return_matches_mean_risk(l2_coef):
     X = synthetic_returns(80, 5, seed=93)
