@@ -51,6 +51,7 @@ _SUPPORTED_OBJECTIVES = frozenset(
 _SUPPORTED_RISKS = frozenset(
     {
         RiskMeasure.VARIANCE,
+        RiskMeasure.STANDARD_DEVIATION,
         RiskMeasure.SEMI_VARIANCE,
         RiskMeasure.SEMI_DEVIATION,
         RiskMeasure.MEAN_ABSOLUTE_DEVIATION,

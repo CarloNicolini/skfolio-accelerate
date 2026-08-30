@@ -62,8 +62,8 @@ MultipleRandomizedCV, and CombinatorialPurgedCV:
   WalkForward / MultipleRandomizedCV use persistent HiGHS; CombinatorialPurgedCV
   MAD/FLPM fall back to native skfolio with :class:`~skfolio_accelerate.AccelerationWarning`;
   remaining boxed scenario cones use compact Clarabel;
-* other MeanRisk configurations (standard deviation, Ulcer, risk limits,
-  linear constraints, fees, L1, …) reuse
+* other MeanRisk configurations (Ulcer, risk limits, linear constraints, fees,
+  L1, …) reuse
   skfolio's CVXPY problem when the training shape is fixed;
 * ``MAXIMIZE_RATIO``, transaction costs, custom CVXPY hooks, MeanRisk
   subclasses, and every other serial

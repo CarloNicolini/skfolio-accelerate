@@ -13,21 +13,23 @@ The library chooses an engine; the benchmark does not pass engine names.
 
 ## Engines (policy order)
 
-1. Compact **OSQP** — boxed MeanRisk variance (`l2_coef` allowed).
-2. Compact **HiGHS** — boxed scenario LPs with `l2_coef=0` (MAD, FLPM, CVaR,
+1. Analytic **max-return** — boxed MeanRisk `MAXIMIZE_RETURN`, including L2.
+2. Compact **OSQP** — boxed MeanRisk variance (`l2_coef` allowed).
+3. Compact **HiGHS** — boxed scenario LPs with `l2_coef=0` (MAD, FLPM, CVaR,
    worst realization). Persistent simplex basis across rolling folds.
    CombinatorialPurgedCV + MAD/FLPM is **not** HiGHS: `backend="auto"` emits
    `AccelerationWarning` and uses unmodified skfolio (measured ~0.5× on
    20-year windows).
-3. Compact **Clarabel** — other boxed scenario cones (semi-variance, CDaR, …).
-4. **cvxpy-sequential** — Parameterized reuse of skfolio's MeanRisk CVXPY
+4. Compact **Clarabel** — boxed standard deviation and scenario cones
+   (semi-variance, CDaR, …).
+5. **cvxpy-sequential** — Parameterized reuse of skfolio's MeanRisk CVXPY
    graph (`mu`, scenario returns, covariance square-root as `cp.Parameter`)
    for configurations outside the compact subset (risk limits, linear
-   constraints, fees, L1, standard deviation, Ulcer, `MAXIMIZE_RETURN`, …).
-5. **fit-assemble** — native `fit` then the shared serial assembly from
+   constraints, fees, L1, Ulcer, …).
+6. **fit-assemble** — native `fit` then the shared serial assembly from
    `weights_` (compiled plan, views, portfolios). Cheap closed-form
    estimators are not in this MeanRisk suite.
-6. **sklearn** — unmodified skfolio (`n_jobs != 1`, pipelines, sequential
+7. **sklearn** — unmodified skfolio (`n_jobs != 1`, pipelines, sequential
    `previous_weights`, custom hooks, …).
 
 ## Solver and tolerances

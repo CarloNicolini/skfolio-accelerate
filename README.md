@@ -31,6 +31,7 @@ There are other few computational tricks to squeeze further CPU cycles:
 - overlapping training moments are updated from sufficient statistics;
 - boxed maximum-return portfolios use an analytic L2-regularized projection;
 - boxed variance uses a compact OSQP QP reused across folds;
+- boxed standard deviation uses a persistent compact Clarabel SOCP;
 - boxed scenario LPs (MAD, CVaR, …) use a persistent HiGHS simplex basis;
 - other boxed scenario cones use a compact Clarabel problem;
 - other MeanRisk configurations reuse skfolio's own CVXPY problem

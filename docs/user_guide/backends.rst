@@ -46,7 +46,7 @@ Backend names
 ``max-return``          Analytic box-and-budget maximum return with L2 regularization
 ``osqp``                Compact mean-variance QP
 ``highs``               Compact scenario LP with persistent HiGHS simplex
-``clarabel``            Compact scenario QP / SOCP / exponential cone
+``clarabel``            Compact standard-deviation / scenario cone problem
 ``cvxpy-sequential``    Reuse skfolio's MeanRisk CVXPY problem across folds
 ``closed-form``         Trivial weights on the shared serial assembly path
 ``fit-assemble``        Native ``fit`` + the same assembly from ``weights_``

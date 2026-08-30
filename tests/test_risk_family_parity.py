@@ -24,6 +24,7 @@ from tests.helpers import synthetic_returns
 
 COMPACT_RISKS = {
     RiskMeasure.VARIANCE,
+    RiskMeasure.STANDARD_DEVIATION,
     RiskMeasure.SEMI_VARIANCE,
     RiskMeasure.SEMI_DEVIATION,
     RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
@@ -145,16 +146,21 @@ def test_compact_family_weights_and_feasibility(risk_measure, objective):
     reference = estimator.fit(X).weights_
     moments = empirical_from_window(
         np.asarray(X, dtype=np.float64),
-        keep_returns=risk_measure is not RiskMeasure.VARIANCE,
+        keep_returns=risk_measure
+        not in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION},
     )
     engine = make_compact_engine(
         estimator_spec(estimator),
         n_assets=X.shape[1],
-        n_observations=(None if risk_measure is RiskMeasure.VARIANCE else X.shape[0]),
+        n_observations=(
+            None
+            if risk_measure in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION}
+            else X.shape[0]
+        ),
     )
     observed = engine.solve(moments, warm=False)
 
-    if risk_measure is RiskMeasure.VARIANCE:
+    if risk_measure in {RiskMeasure.VARIANCE, RiskMeasure.STANDARD_DEVIATION}:
         tolerance = 5e-4
     elif risk_measure in {RiskMeasure.EVAR, RiskMeasure.EDAR}:
         tolerance = 2e-4
