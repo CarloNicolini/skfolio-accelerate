@@ -4,7 +4,7 @@
 
 ## A short story (≈2 minutes)
 
-Late August 2026 I had a itch and a laptop. Walk-forward and multi-path skfolio backtests kept re-solving almost the same MeanRisk problem a few thousand times, and an early patch that saved ~5% of wall time felt… useless. So I opened Cursor agents from the desk and from the phone, and we started vibecoding toward a different question: *what if amortization, not more cores, is the way?*
+Late August 2026 I had an itch and a laptop. Walk-forward and multi-path skfolio backtests kept re-solving almost the same MeanRisk problem a few thousand times, and an early patch that saved ~5% of wall time felt… useless. So I opened Cursor agents from the desk and from the phone, and we started vibecoding toward a different question: *what if amortization, not more cores, is the way?*
 
 The first ah-ha was Amdahl in reverse. Compiling a fancier GridSearch barely moved the needle. The real tax was **massive sequential CV**—hundreds of overlapping windows, sometimes tens of thousands of path solves. Agents helped me say it out loud, then measure it: reuse Gram moments, keep one OSQP topology alive, warm-start fold to fold. Boxed variance jumped from “interesting” to **~50×** on long WalkForward. That is the moment I stopped asking *is this a toy?* and started asking *how far can we push it?*
 
