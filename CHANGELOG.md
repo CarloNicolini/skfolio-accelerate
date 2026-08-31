@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Sequential / fit-assemble `cross_val_predict` accepts routed `params={"factors": ...}`
+  for `TimeSeriesFactorModel` MeanRisk. Factor SOC Parameters warm-start across
+  folds when exposure `linear_constraints` are absent; characteristics panels and
+  unrecognized fit metadata stay on native skfolio.
 - Docs and examples treat serial CV assembly (compiled plan, views, portfolios
   from `weights_`) as a general `cross_val_predict` saving. Closed-form
   estimators are no longer presented as an optimizer speedup.

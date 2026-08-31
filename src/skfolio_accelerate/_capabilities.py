@@ -113,6 +113,10 @@ _COMPACT_NONE_ATTRS = (
 
 _CLOSED_FORM_TYPES = (EqualWeighted, InverseVolatility, Random)
 
+# Fit metadata that assemble / sequential can slice per fold (same row axis as X).
+# ``characteristics`` (AssetPanel) is intentionally excluded: keep native skfolio.
+_ROUTED_ROW_FIT_PARAMS = frozenset({"factors"})
+
 
 @dataclass(frozen=True, slots=True)
 class CallCapabilities:
@@ -270,6 +274,20 @@ def blocked_reason(estimator) -> str | None:
             return f"estimator {type(estimator).__name__} is not MeanRisk"
 
 
+def _unsupported_fit_params(
+    params: dict | None, *, allow_routed_rows: bool
+) -> str | None:
+    """Return a block reason for fit ``params``, or ``None`` if they are allowed."""
+    if not params:
+        return None
+    if not allow_routed_rows:
+        return "fit params use skfolio cross_val_predict"
+    unknown = set(params) - _ROUTED_ROW_FIT_PARAMS
+    if unknown:
+        return "fit params use skfolio cross_val_predict"
+    return None
+
+
 def _call_options_blocked(
     *,
     method: str,
@@ -279,12 +297,13 @@ def _call_options_blocked(
     cv=None,
     n_jobs: int | None | object = ...,
     verb: str,
+    allow_routed_rows: bool = False,
 ) -> str | None:
     """Shared call-level gates for compact / assemble / sequential paths."""
     if method != "predict":
         return f"only method='predict' is {verb}"
-    if params:
-        return "fit params use skfolio cross_val_predict"
+    if reason := _unsupported_fit_params(params, allow_routed_rows=allow_routed_rows):
+        return reason
     if column_indices is not None:
         return "column_indices uses skfolio cross_val_predict"
     if entry_rebalancing_params is not None:
@@ -320,6 +339,7 @@ def compact_blocked_reason(
         cv=cv,
         n_jobs=n_jobs,
         verb="compacted",
+        allow_routed_rows=False,
     ):
         return reason
     return continuation_unhelpful_reason(estimator, cv) or blocked_reason(estimator)
@@ -344,6 +364,7 @@ def assemble_blocked_reason(
         cv=cv,
         n_jobs=n_jobs,
         verb="assembled from weights",
+        allow_routed_rows=True,
     ):
         return reason
     match estimator:

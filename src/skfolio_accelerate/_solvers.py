@@ -15,6 +15,7 @@ import numpy as np
 from numpy.typing import NDArray
 from skfolio.optimization import InverseVolatility, Random
 from skfolio.utils.stats import rand_weights_dirichlet
+from skfolio.utils.tools import _check_method_params
 from sklearn.base import clone
 
 from skfolio_accelerate.compact import EngineCache, MeanRiskSpec
@@ -273,6 +274,20 @@ def _train_target(y_arr: np.ndarray | None, fold: FoldSpec, n_assets: int):
     return window_view(y_arr, fold.train_idx, cols)
 
 
+def _fold_fit_params(X, params: dict | None, fold: FoldSpec) -> dict[str, Any]:
+    """Slice routed fit metadata to this fold (same rules as skfolio)."""
+    if not params:
+        return {}
+    fit_params = dict(params)
+    if fold.asset_idx is not None:
+        fit_params = _check_method_params(
+            X, params=fit_params, indices=np.asarray(fold.asset_idx), axis=1
+        )
+    return _check_method_params(
+        X, params=fit_params, indices=np.asarray(fold.train_idx), axis=0
+    )
+
+
 def solve_sequential_folds(
     estimator,
     X,
@@ -282,6 +297,7 @@ def solve_sequential_folds(
     *,
     cache: SequentialProblemCache | None = None,
     path_id: int = 0,
+    params: dict | None = None,
 ) -> FoldBatchResult:
     """Solve one path batch by Parameterizing MeanRisk and reusing ``cp.Problem``.
 
@@ -308,6 +324,9 @@ def solve_sequential_folds(
     path_id : int, default=0
         MRC path identifier.
 
+    params : dict, optional
+        Routed fit metadata (e.g. ``factors``) sliced per fold.
+
     Returns
     -------
     result : FoldBatchResult
@@ -320,6 +339,8 @@ def solve_sequential_folds(
     weights: dict[int, NDArray[np.float64]] = {}
     solve_s = 0.0
     n_assets = int(x_arr.shape[1])
+    # Moment-session skip of prior.fit is only valid for default empirical priors.
+    # Factor priors must be re-fit every fold; nonempty ``params`` also disables it.
     moment_session = (
         path_moment_session(
             x_arr,
@@ -327,7 +348,7 @@ def solve_sequential_folds(
             keep_returns=True,
             keep_covariance=True,
         )
-        if is_default_empirical(estimator)
+        if is_default_empirical(estimator) and not params
         else None
     )
     for fold in folds:
@@ -338,10 +359,11 @@ def solve_sequential_folds(
         if not reused:
             x_train = _train_slice(X, x_arr, fold)
             y_train = _train_target(y_arr, fold, n_assets)
+            fit_params = _fold_fit_params(X, params, fold)
             if y_train is None:
-                adapter.fit(x_train)
+                adapter.fit(x_train, **fit_params)
             else:
-                adapter.fit(x_train, y_train)
+                adapter.fit(x_train, y_train, **fit_params)
         fitted = np.asarray(adapter.weights_, dtype=np.float64)
         if fitted.ndim != 1:
             raise ValueError("2-dimensional weights_ cannot be assembled")
@@ -359,9 +381,12 @@ def solve_sequential_folds(
 
 def fit_native_weights(
     estimator,
+    X,
     x_arr: np.ndarray,
     y_arr: np.ndarray | None,
     folds: Sequence[FoldSpec],
+    *,
+    params: dict | None = None,
 ) -> FoldBatchResult:
     """Clone, native ``fit``, and collect 1-D ``weights_`` for each fold.
 
@@ -371,6 +396,9 @@ def fit_native_weights(
         Unfitted portfolio optimizer. Each fold receives a fresh
         :func:`~sklearn.base.clone`.
 
+    X : array-like
+        Full return matrix (DataFrame columns preserved when available).
+
     x_arr : ndarray of shape (n_observations, n_assets)
         Contiguous float64 returns.
 
@@ -379,6 +407,9 @@ def fit_native_weights(
 
     folds : sequence of FoldSpec
         Compiled train/test splits.
+
+    params : dict, optional
+        Routed fit metadata (e.g. ``factors``) sliced per fold.
 
     Returns
     -------
@@ -401,12 +432,13 @@ def fit_native_weights(
     for fold in folds:
         started = time.perf_counter()
         fitted = clone(estimator)
-        x_train = window_view(x_arr, fold.train_idx, fold.asset_idx)
+        x_train = _train_slice(X, x_arr, fold)
         y_train = _train_target(y_arr, fold, n_assets)
+        fit_params = _fold_fit_params(X, params, fold)
         if y_train is None:
-            fitted.fit(x_train)
+            fitted.fit(x_train, **fit_params)
         else:
-            fitted.fit(x_train, y_train)
+            fitted.fit(x_train, y_train, **fit_params)
         weights_ = np.asarray(fitted.weights_, dtype=np.float64)
         if weights_.ndim != 1:
             raise ValueError("2-dimensional weights_ cannot be assembled")

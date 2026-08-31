@@ -37,6 +37,41 @@ skfolio: a persistent simplex basis does not speed up non-rolling long
 training windows. The call emits :class:`~skfolio_accelerate.AccelerationWarning`.
 You do not pass an engine name in application code.
 
+Factor priors (``TimeSeriesFactorModel``)
+*****************************************
+
+Factor-model MeanRisk is **not** compacted (custom prior). With metadata
+routing enabled and ``params={"factors": factors}``, ``backend="auto"`` uses
+``cvxpy-sequential`` when the MeanRisk configuration is otherwise sequential-
+eligible:
+
+* each fold still **re-fits** the factor prior (loadings and factor moments
+  change);
+* the CVXPY problem is reused when the SOC shapes match by rebinding the
+  Parameterized ``mu``, scenario returns, and factor-structured
+  ``covariance_sqrt`` (``B @ chol(F)`` plus idiosyncratic diagonal);
+* factor-named ``linear_constraints`` (exposure constraints) bake loadings as
+  constants, so those folds **rebuild** the problem while still sharing the
+  compiled CV plan and weight assembly.
+
+``params={"characteristics": ...}`` (characteristics / panel factor models)
+and other unrecognized fit metadata stay on unmodified skfolio. Sklearn
+``Pipeline`` wrappers also stay on the native path.
+
+.. code-block:: python
+
+    from sklearn import set_config
+    from skfolio.prior import TimeSeriesFactorModel
+    from skfolio.optimization import MeanRisk
+    from skfolio_accelerate import cross_val_predict
+
+    set_config(enable_metadata_routing=True)
+    model = MeanRisk(prior_estimator=TimeSeriesFactorModel())
+    pred, report = cross_val_predict(
+        model, X, cv=cv, params={"factors": factors}, return_report=True
+    )
+    print(report.backend, report.n_warm_starts, report.n_rebuilds)
+
 Backend names
 *************
 
