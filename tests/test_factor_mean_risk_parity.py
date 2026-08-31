@@ -55,7 +55,7 @@ def test_boxed_empirical_stays_compact():
     assert report.backend == "osqp"
 
 
-def test_asset_linear_constraints_use_sequential():
+def test_asset_linear_constraints_use_osqp():
     import pandas as pd
 
     raw = synthetic_returns(96, 4, seed=42)
@@ -66,7 +66,7 @@ def test_asset_linear_constraints_use_sequential():
         estimator, X, cv=_walk_forward(), n_jobs=1, return_report=True
     )
     _assert_path_parity(observed, reference)
-    assert report.backend == "cvxpy-sequential"
+    assert report.backend == "osqp"
 
 
 def test_timeseries_factor_model_matches_native(factor_panel):

@@ -1,22 +1,4 @@
-"""Persistent HiGHS simplex engines for boxed MeanRisk LPs.
-
-MAD, FLPM, CVaR, and worst realization are linear programs. Adjacent
-WalkForward folds share most scenario rows; baking ``R − μ`` into every
-coefficient hides that overlap, so a previous simplex basis is a *worse*
-start than a cold crash. This engine keeps an auxiliary portfolio mean
-(MAD/FLPM) or raw returns (CVaR / worst realization) so overlapping
-observations keep the same constraint rows and auxiliary variables.
-
-A rolling step of ``s`` then overwrites ``s`` scenario rows plus the mean
-equality, restores the previous basis, and reoptimizes. Dual/primal simplex
-typically needs far fewer pivots than fold 1.
-
-CombinatorialPurgedCV is the exception for MAD and FLPM: training sets are
-block unions, not slides, so the previous vertex is not nearby. On that
-splitter ``backend="auto"`` warns and uses native skfolio instead of HiGHS.
-CVaR and worst realization stay on HiGHS even for CPCV (they were not slower
-than native in the same study).
-"""
+"""Persistent HiGHS simplex engines for boxed MeanRisk LPs."""
 
 from __future__ import annotations
 
@@ -55,30 +37,13 @@ def is_highs_lp_risk(spec: MeanRiskSpec) -> bool:
 
 
 def continuation_unhelpful_reason(estimator, cv) -> str | None:
-    """Why this call should use native skfolio instead of persistent HiGHS.
-
-    WalkForward and MultipleRandomizedCV slide a fixed-length window, so
-    circular scenario slots plus the previous simplex basis cut later-fold
-    pivots (about 6–13× vs native on 20-year MAD/CVaR). CombinatorialPurgedCV
-    does not: each training set is a different block union. Importing the
-    previous MAD/FLPM basis then needs as many pivots as a cold start, and
-    HiGHS simplex with presolve off loses to native Clarabel on long ``T``.
-
-    Returns
-    -------
-    reason : str or None
-        A stable phrase used as ``compact_reason`` / ``sequential_reason`` /
-        ``assemble_reason`` so ``backend="auto"`` selects unmodified skfolio.
-        ``None`` when HiGHS continuation is the intended engine.
-    """
     if cv is None or type(cv).__name__ != "CombinatorialPurgedCV":
         return None
     if type(estimator).__name__ not in {"MeanRisk", "ParametricMeanRisk"}:
         return None
-    if float(getattr(estimator, "l2_coef", 0.0) or 0.0) != 0.0:
+    if float(estimator.l2_coef or 0.0) != 0.0:
         return None
-    risk = getattr(estimator, "risk_measure", None)
-    if risk not in _CPCV_NATIVE_LP_RISKS:
+    if estimator.risk_measure not in _CPCV_NATIVE_LP_RISKS:
         return None
     return (
         "CombinatorialPurgedCV MAD/FLPM uses native skfolio: a persistent "
@@ -111,7 +76,7 @@ class LinearHighs:
         self.n_observations = int(n_observations)
         self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
         self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
-        self.budget = float(spec.budget)
+        self.budget = 1.0 if spec.budget is None else float(spec.budget)
         self.solver = Highs()
         self.solver.setOptionValue("output_flag", False)
         self.solver.setOptionValue("presolve", "off")
@@ -136,43 +101,42 @@ class LinearHighs:
         self._build_pattern()
 
     def _risk_scale(self) -> float:
-        if self.spec.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
-            return float(self.spec.risk_aversion)
-        return 1.0
+        return float(self.spec.risk_aversion) if self.spec.objective is ObjectiveFunction.MAXIMIZE_UTILITY else 1.0
+
+    def _store_matrix(self, starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper):
+        self._cost, self._col_lower, self._col_upper = cost, col_lower, col_upper
+        self._row_lower, self._row_upper = row_lower, row_upper
+        self._a_start = np.asarray(starts, dtype=np.int32)
+        self._a_index = np.asarray(indices, dtype=np.int32)
+        self._a_value = np.asarray(values, dtype=np.float64)
+
+    def _weight_scenario_cols(self, n, t, scenario_row, extra_rows=()):
+        starts, indices, values = [0], [], []
+        r_nz = np.empty((n, t), dtype=np.int32)
+        mu_nz = np.empty(n, dtype=np.int32) if extra_rows else None
+        for j in range(n):
+            indices.append(0)
+            values.append(1.0)
+            for row in extra_rows:
+                indices.append(row)
+                values.append(0.0)
+                mu_nz[j] = len(values) - 1
+            for k in range(t):
+                indices.append(scenario_row + k)
+                values.append(0.0)
+                r_nz[j, k] = len(values) - 1
+            starts.append(len(indices))
+        return starts, indices, values, r_nz, mu_nz
 
     def _build_pattern(self) -> None:
-        risk = self.spec.risk_measure
-        n = self.n_assets
-        t = self.n_observations
-        lam = self._risk_scale()
-        if risk in {
-            RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
-            RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
-        }:
+        risk, n, t, lam = self.spec.risk_measure, self.n_assets, self.n_observations, self._risk_scale()
+        if risk in {RiskMeasure.MEAN_ABSOLUTE_DEVIATION, RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT}:
             nv = n + 1 + t
             cost = np.zeros(nv, dtype=np.float64)
-            coef = 2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0
-            cost[n + 1 :] = lam * coef / t
-            col_lower = np.zeros(nv, dtype=np.float64)
-            col_upper = np.full(nv, kHighsInf, dtype=np.float64)
-            col_lower[n] = -kHighsInf
-            col_lower[:n] = self.min_w
-            col_upper[:n] = self.max_w
-            n_row = 2 + t
-            starts = [0]
-            indices: list[int] = []
-            values: list[float] = []
-            mu_nz = np.empty(n, dtype=np.int32)
-            r_nz = np.empty((n, t), dtype=np.int32)
-            for j in range(n):
-                indices.extend([0, 1])
-                values.extend([1.0, 0.0])
-                mu_nz[j] = len(values) - 1
-                for k in range(t):
-                    indices.append(2 + k)
-                    values.append(0.0)
-                    r_nz[j, k] = len(values) - 1
-                starts.append(len(indices))
+            cost[n + 1 :] = lam * (2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0) / t
+            col_lower, col_upper = np.zeros(nv), np.full(nv, kHighsInf)
+            col_lower[n], col_lower[:n], col_upper[:n] = -kHighsInf, self.min_w, self.max_w
+            starts, indices, values, r_nz, mu_nz = self._weight_scenario_cols(n, t, 2, extra_rows=(1,))
             indices.append(1)
             values.append(1.0)
             for k in range(t):
@@ -183,36 +147,20 @@ class LinearHighs:
                 indices.append(2 + k)
                 values.append(1.0)
                 starts.append(len(indices))
-            row_lower = np.zeros(n_row, dtype=np.float64)
-            row_upper = np.full(n_row, kHighsInf, dtype=np.float64)
-            row_lower[0] = self.budget
-            row_upper[0] = self.budget
+            row_lower, row_upper = np.zeros(2 + t), np.full(2 + t, kHighsInf)
+            row_lower[0] = row_upper[0] = self.budget
             row_upper[1] = 0.0
-            self._mu_nz = mu_nz
-            self._r_nz = r_nz
-        elif risk is RiskMeasure.CVAR:
+            self._mu_nz, self._r_nz = mu_nz, r_nz
+            self._store_matrix(starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper)
+            return
+        if risk is RiskMeasure.CVAR:
             nv = n + 1 + t
             cost = np.zeros(nv, dtype=np.float64)
             cost[n] = lam
             cost[n + 1 :] = lam / (t * (1.0 - float(self.spec.cvar_beta)))
-            col_lower = np.full(nv, -kHighsInf, dtype=np.float64)
-            col_upper = np.full(nv, kHighsInf, dtype=np.float64)
-            col_lower[:n] = self.min_w
-            col_upper[:n] = self.max_w
-            col_lower[n + 1 :] = 0.0
-            n_row = 1 + t
-            starts = [0]
-            indices = []
-            values = []
-            r_nz = np.empty((n, t), dtype=np.int32)
-            for j in range(n):
-                indices.append(0)
-                values.append(1.0)
-                for k in range(t):
-                    indices.append(1 + k)
-                    values.append(0.0)
-                    r_nz[j, k] = len(values) - 1
-                starts.append(len(indices))
+            col_lower, col_upper = np.full(nv, -kHighsInf), np.full(nv, kHighsInf)
+            col_lower[:n], col_upper[:n], col_lower[n + 1 :] = self.min_w, self.max_w, 0.0
+            starts, indices, values, r_nz, _ = self._weight_scenario_cols(n, t, 1)
             for k in range(t):
                 indices.append(1 + k)
                 values.append(1.0)
@@ -221,53 +169,28 @@ class LinearHighs:
                 indices.append(1 + k)
                 values.append(1.0)
                 starts.append(len(indices))
-            row_lower = np.zeros(n_row, dtype=np.float64)
-            row_upper = np.full(n_row, kHighsInf, dtype=np.float64)
-            row_lower[0] = self.budget
-            row_upper[0] = self.budget
-            self._mu_nz = None
-            self._r_nz = r_nz
-        elif risk is RiskMeasure.WORST_REALIZATION:
+            row_lower, row_upper = np.zeros(1 + t), np.full(1 + t, kHighsInf)
+            row_lower[0] = row_upper[0] = self.budget
+            self._mu_nz, self._r_nz = None, r_nz
+            self._store_matrix(starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper)
+            return
+        if risk is RiskMeasure.WORST_REALIZATION:
             nv = n + 1
             cost = np.zeros(nv, dtype=np.float64)
             cost[n] = lam
-            col_lower = np.full(nv, -kHighsInf, dtype=np.float64)
-            col_upper = np.full(nv, kHighsInf, dtype=np.float64)
-            col_lower[:n] = self.min_w
-            col_upper[:n] = self.max_w
-            n_row = 1 + t
-            starts = [0]
-            indices = []
-            values = []
-            r_nz = np.empty((n, t), dtype=np.int32)
-            for j in range(n):
-                indices.append(0)
-                values.append(1.0)
-                for k in range(t):
-                    indices.append(1 + k)
-                    values.append(0.0)
-                    r_nz[j, k] = len(values) - 1
-                starts.append(len(indices))
+            col_lower, col_upper = np.full(nv, -kHighsInf), np.full(nv, kHighsInf)
+            col_lower[:n], col_upper[:n] = self.min_w, self.max_w
+            starts, indices, values, r_nz, _ = self._weight_scenario_cols(n, t, 1)
             for k in range(t):
                 indices.append(1 + k)
                 values.append(1.0)
             starts.append(len(indices))
-            row_lower = np.zeros(n_row, dtype=np.float64)
-            row_upper = np.full(n_row, kHighsInf, dtype=np.float64)
-            row_lower[0] = self.budget
-            row_upper[0] = self.budget
-            self._mu_nz = None
-            self._r_nz = r_nz
-        else:
-            raise ValueError(f"unsupported LP risk {risk}")
-        self._cost = cost
-        self._col_lower = col_lower
-        self._col_upper = col_upper
-        self._row_lower = row_lower
-        self._row_upper = row_upper
-        self._a_start = np.asarray(starts, dtype=np.int32)
-        self._a_index = np.asarray(indices, dtype=np.int32)
-        self._a_value = np.asarray(values, dtype=np.float64)
+            row_lower, row_upper = np.zeros(1 + t), np.full(1 + t, kHighsInf)
+            row_lower[0] = row_upper[0] = self.budget
+            self._mu_nz, self._r_nz = None, r_nz
+            self._store_matrix(starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper)
+            return
+        raise ValueError(f"unsupported LP risk {risk}")
 
     def _write_slots(
         self, slot_indices: NDArray[np.int32], rows: NDArray[np.float64]

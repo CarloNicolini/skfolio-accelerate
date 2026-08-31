@@ -235,7 +235,7 @@ def test_fallback_estimators_assemble_from_native_fit():
     for estimator, expected in (
         (HierarchicalRiskParity(), "fit-assemble"),
         (RiskBudgeting(), "fit-assemble"),
-        (MeanRisk(min_return=1e-5), "cvxpy-sequential"),
+        (MeanRisk(min_return=1e-5), "osqp"),
         (MeanRisk(management_fees=1e-4), "cvxpy-sequential"),
         (MeanRisk(risk_measure=RiskMeasure.STANDARD_DEVIATION), "clarabel"),
     ):
