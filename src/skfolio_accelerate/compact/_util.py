@@ -29,6 +29,7 @@ class MeanRiskSpec:
     risk_measure: RiskMeasure
     objective: ObjectiveFunction
     l2_coef: float
+    l1_coef: float
     risk_aversion: float
     cvar_beta: float
     evar_beta: float
@@ -37,7 +38,15 @@ class MeanRiskSpec:
     min_acceptable_return: Any
     min_weights: Any
     max_weights: Any
-    budget: float
+    budget: float | None
+    min_budget: float | None
+    max_budget: float | None
+    min_return: float | None
+    left_inequality: Any
+    right_inequality: Any
+    linear_constraints: Any
+    groups: Any
+    asset_names: tuple[str, ...] | None
 
     def needs_returns(self) -> bool:
         return self.objective is not ObjectiveFunction.MAXIMIZE_RETURN and self.risk_measure not in {
@@ -49,11 +58,15 @@ class MeanRiskSpec:
         return self.risk_aversion if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY else 1.0
 
 
-def estimator_spec(estimator) -> MeanRiskSpec:
+def estimator_spec(estimator, *, names: tuple[str, ...] | None = None) -> MeanRiskSpec:
+    min_return = estimator.min_return
+    if min_return is not None and np.ndim(min_return) == 0:
+        min_return = float(min_return)
     return MeanRiskSpec(
         risk_measure=estimator.risk_measure,
         objective=estimator.objective_function,
         l2_coef=float(estimator.l2_coef or 0.0),
+        l1_coef=float(estimator.l1_coef or 0.0),
         risk_aversion=float(estimator.risk_aversion or 1.0),
         cvar_beta=float(estimator.cvar_beta or 0.95),
         evar_beta=float(estimator.evar_beta or 0.95),
@@ -62,13 +75,31 @@ def estimator_spec(estimator) -> MeanRiskSpec:
         min_acceptable_return=estimator.min_acceptable_return,
         min_weights=estimator.min_weights,
         max_weights=estimator.max_weights,
-        budget=float(estimator.budget or 1.0),
+        budget=None if estimator.budget is None else float(estimator.budget),
+        min_budget=None if estimator.min_budget is None else float(estimator.min_budget),
+        max_budget=None if estimator.max_budget is None else float(estimator.max_budget),
+        min_return=min_return,
+        left_inequality=estimator.left_inequality,
+        right_inequality=estimator.right_inequality,
+        linear_constraints=estimator.linear_constraints,
+        groups=estimator.groups,
+        asset_names=names,
     )
 
 
-def as_bounds(value: Any, n: int, default: float) -> NDArray[np.float64]:
+def as_bounds(
+    value: Any, n: int, default: float, *, names: tuple[str, ...] | None = None
+) -> NDArray[np.float64]:
     if value is None:
         return np.full(n, default, dtype=np.float64)
+    if type(value) is dict:
+        if names is None:
+            raise ValueError("dict weight bounds require asset names")
+        out = np.full(n, default, dtype=np.float64)
+        index = {name: i for i, name in enumerate(names)}
+        for key, item in value.items():
+            out[index[str(key)]] = float(item)
+        return out
     arr = np.asarray(value, dtype=np.float64)
     if arr.ndim == 0:
         return np.full(n, float(arr), dtype=np.float64)

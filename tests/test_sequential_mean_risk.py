@@ -58,7 +58,7 @@ def test_auto_picks_osqp_for_boxed_variance():
     assert report.reason == "boxed MeanRisk variance; compact OSQP"
 
 
-def test_auto_picks_sequential_for_risk_limits():
+def test_auto_picks_osqp_for_return_limit():
     X = synthetic_returns(84, 5, seed=4)
     estimator = MeanRisk(min_return=1e-5, l2_coef=1e-5)
     cv = _walk_forward()
@@ -69,9 +69,7 @@ def test_auto_picks_sequential_for_risk_limits():
     np.testing.assert_allclose(
         path_sharpes(observed), path_sharpes(reference), rtol=5e-3, atol=5e-4
     )
-    assert report.backend == "cvxpy-sequential"
-    assert "compact subset" in (report.reason or "")
-    assert report.n_rebuilds == 1
+    assert report.backend == "osqp"
     assert report.n_warm_starts >= 1
 
 
@@ -87,7 +85,7 @@ def test_linear_constraints_on_named_assets():
     np.testing.assert_allclose(
         path_sharpes(observed), path_sharpes(reference), rtol=3e-3, atol=2e-4
     )
-    assert report.backend == "cvxpy-sequential"
+    assert report.backend == "osqp"
 
 
 def test_fixed_window_cvar_reuses_one_problem():
@@ -112,7 +110,7 @@ def test_fixed_window_default_prior_is_only_fitted_once(monkeypatch):
 
     monkeypatch.setattr(EmpiricalPrior, "fit", counted_fit)
     X = synthetic_returns(84, 5, seed=4)
-    estimator = MeanRisk(min_return=1e-5, l2_coef=1e-5)
+    estimator = MeanRisk(risk_measure=RiskMeasure.CVAR, min_return=1e-6, l2_coef=1e-5)
     _, report = cross_val_predict(
         estimator,
         X,

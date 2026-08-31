@@ -60,6 +60,26 @@ _CLOSED_FORM = (EqualWeighted, InverseVolatility, Random)
 _CLOSED_FORM_TYPES = _CLOSED_FORM
 _ROUTED = frozenset({"factors"})
 _MEAN_RISK = {MeanRisk, ParametricMeanRisk}
+_OSQP_LINEAR = frozenset(
+    {
+        "linear_constraints",
+        "groups",
+        "left_inequality",
+        "right_inequality",
+        "min_return",
+        "min_budget",
+        "max_budget",
+    }
+)
+
+
+def _variance_osqp(estimator) -> bool:
+    return (
+        type(estimator) in _MEAN_RISK
+        and estimator.risk_measure is RiskMeasure.VARIANCE
+        and estimator.objective_function in _OBJECTIVES
+        and estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -158,10 +178,18 @@ def blocked_reason(estimator) -> str | None:
             if type(estimator) not in _MEAN_RISK:
                 return "MeanRisk subclasses are not compacted"
             state = estimator.__dict__
+            osqp = _variance_osqp(estimator)
             for name in _COMPACT_NONE:
-                if state[name] is not None:
-                    return f"{name} is not compacted"
-            if estimator.budget is None:
+                if state[name] is None:
+                    continue
+                if osqp and name in _OSQP_LINEAR:
+                    if name in {"min_budget", "max_budget"} and estimator.budget is not None:
+                        return f"{name} is not compacted"
+                    continue
+                return f"{name} is not compacted"
+            if estimator.budget is None and not (
+                osqp and (estimator.min_budget is not None or estimator.max_budget is not None)
+            ):
                 return "an unspecified equality budget is not compacted"
             if estimator.needs_previous_weights:
                 return "sequential previous_weights (costs, turnover, or fallback)"
@@ -181,12 +209,16 @@ def blocked_reason(estimator) -> str | None:
             )
             if estimator.solver not in allowed:
                 return f"solver {estimator.solver!r} is not compacted for {risk.name}"
-            if _nonzero(estimator.l1_coef):
+            if _nonzero(estimator.l1_coef) and not osqp:
                 return "l1_coef is not compacted"
             if type(estimator.min_weights) is dict or type(estimator.max_weights) is dict:
-                return "dict weight bounds are not compacted"
+                if not osqp:
+                    return "dict weight bounds are not compacted"
             if type(estimator.min_acceptable_return) is dict:
                 return "dict minimum acceptable returns are not compacted"
+            if osqp and estimator.min_return is not None:
+                if type(estimator.min_return) is dict or np.ndim(estimator.min_return) > 0:
+                    return "min_return is not compacted"
             for attr, msg in (
                 ("transaction_costs", "transaction costs are not compacted"),
                 ("management_fees", "management fees are not compacted"),

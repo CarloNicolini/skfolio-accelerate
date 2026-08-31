@@ -62,11 +62,19 @@ def solve_compact_folds(session, folds, spec: MeanRiskSpec, *, engines=None) -> 
     weights = {}
     moments_s = solve_s = 0.0
     warm_before, engine = 0, None
+    names = spec.asset_names
     for i, fold in enumerate(folds):
         t0 = time.perf_counter()
         moments = session.get(fold)
         moments_s += time.perf_counter() - t0
-        engine = engines.get(int(moments.mu.size), int(moments.n_observations) if spec.needs_returns() else None)
+        fold_names = names
+        if names is not None and fold.asset_idx is not None:
+            fold_names = tuple(names[int(j)] for j in fold.asset_idx)
+        engine = engines.get(
+            int(moments.mu.size),
+            int(moments.n_observations) if spec.needs_returns() else None,
+            names=fold_names,
+        )
         if i == 0:
             warm_before = engine.n_warm_starts
         t1 = time.perf_counter()

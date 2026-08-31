@@ -49,17 +49,20 @@ class EngineCache:
     engine: object | None = None
     n_assets: int = -1
     n_observations: int | None = None
+    names: tuple[str, ...] | None = None
 
-    def get(self, n_assets: int, n_observations: int | None):
-        need_new = self.engine is None or n_assets != self.n_assets
+    def get(self, n_assets: int, n_observations: int | None, names: tuple[str, ...] | None = None):
+        from dataclasses import replace
+
+        need_new = self.engine is None or n_assets != self.n_assets or names != self.names
         if self.spec.needs_returns():
             need_new = need_new or n_observations != self.n_observations
         if need_new:
-            import skfolio_accelerate.compact as compact
-
-            self.engine = compact.make_compact_engine(
-                self.spec, n_assets=n_assets, n_observations=n_observations
+            spec = self.spec if names is None else replace(self.spec, asset_names=names)
+            self.engine = make_compact_engine(
+                spec, n_assets=n_assets, n_observations=n_observations
             )
             self.n_assets = n_assets
             self.n_observations = n_observations
+            self.names = names
         return self.engine

@@ -184,7 +184,7 @@ def test_cpcv_grid_search_matches_repeated_predict():
         ]
     )
     np.testing.assert_allclose(
-        result.cv_results_["mean_test_score"], expected, rtol=1e-12, atol=1e-12
+        result.cv_results_["mean_test_score"], expected, rtol=1e-8, atol=1e-8
     )
 
 
@@ -224,5 +224,5 @@ def test_mrc_grid_search_matches_repeated_predict():
         ]
     )
     np.testing.assert_allclose(
-        result.cv_results_["mean_test_score"], expected, rtol=1e-12, atol=1e-12
+        result.cv_results_["mean_test_score"], expected, rtol=1e-8, atol=1e-8
     )

@@ -22,6 +22,7 @@ from skfolio_accelerate.compact._util import (
     upper_csc,
     upper_data,
 )
+from skfolio_accelerate.compact.constraints import compile_osqp_constraints
 from skfolio_accelerate.moments import FoldMoments
 
 
@@ -44,7 +45,7 @@ class ClarabelEngine:
         self.n_assets = int(n_assets)
         self.min_w = as_bounds(spec.min_weights, n_assets, 0.0)
         self.max_w = as_bounds(spec.max_weights, n_assets, 1.0)
-        self.budget = float(spec.budget)
+        self.budget = 1.0 if spec.budget is None else float(spec.budget)
         self.l2 = float(spec.l2_coef)
         self.objective = spec.objective
         self.solver = None
@@ -397,7 +398,7 @@ class MaxReturnBox:
         self.n_assets = int(n_assets)
         self.min_w = as_bounds(spec.min_weights, n_assets, 0.0)
         self.max_w = as_bounds(spec.max_weights, n_assets, 1.0)
-        self.budget = float(spec.budget)
+        self.budget = 1.0 if spec.budget is None else float(spec.budget)
         self.l2 = float(spec.l2_coef)
         self.n_warm_starts = 0
 
@@ -443,24 +444,38 @@ class MinVarianceOSQP:
     def __init__(self, spec: MeanRiskSpec, n_assets: int) -> None:
         self.spec = spec
         self.n_assets = int(n_assets)
-        self.min_w = as_bounds(spec.min_weights, n_assets, 0.0)
-        self.max_w = as_bounds(spec.max_weights, n_assets, 1.0)
-        self.budget = float(spec.budget)
         self.l2 = float(spec.l2_coef)
+        self.l1 = float(spec.l1_coef or 0.0)
         self.objective = spec.objective
         self.risk_aversion = float(spec.risk_aversion)
         self._x = self._y = None
-        self._p_dense = np.empty((n_assets, n_assets), dtype=np.float64)
         self.n_warm_starts = 0
         n = n_assets
-        self._A = sp.vstack([sp.csr_matrix(np.ones((1, n))), sp.eye(n, format="csr")]).tocsc()
-        self._l = np.concatenate([[self.budget], self.min_w])
-        self._u = np.concatenate([[self.budget], self.max_w])
-        self._q = np.zeros(n, dtype=np.float64)
+        A, l, u, n_extra, mu_row, min_w, max_w = compile_osqp_constraints(spec, n)
+        self.min_w, self.max_w = min_w, max_w
+        self._A = A
+        self._l = l
+        self._u = u
+        self._mu_row = mu_row
+        self._mu_slots = []
+        if mu_row is not None:
+            for column in range(n):
+                start, stop = int(A.indptr[column]), int(A.indptr[column + 1])
+                loc = np.flatnonzero(A.indices[start:stop] == mu_row)
+                if loc.size != 1:
+                    raise ValueError("min_return row must be dense in the weight columns")
+                self._mu_slots.append(start + int(loc[0]))
+        nv = n + n_extra
+        self._p_dense = np.empty((n, n), dtype=np.float64)
+        self._q = np.zeros(nv, dtype=np.float64)
+        if n_extra:
+            self._q[n:] = self.l1
         eye = identity(n)
+        P_w = upper_csc(2.0 * (eye + self.l2 * eye + 1e-16 * np.ones((n, n))))
+        P = P_w if n_extra == 0 else sp.block_diag((P_w, sp.csc_matrix((n_extra, n_extra))), format="csc")
         self._prob = osqp.OSQP()
         self._prob.setup(
-            P=upper_csc(2.0 * (eye + self.l2 * eye + 1e-16 * np.ones((n, n)))),
+            P=P,
             q=self._q,
             A=self._A,
             l=self._l,
@@ -488,8 +503,16 @@ class MinVarianceOSQP:
         self._p_dense[diagonal] += 2.0 * self.l2
         q = self._q
         if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
-            q = -np.ascontiguousarray(moments.mu, dtype=np.float64)
-        self._prob.update(Px=upper_data(self._p_dense), q=q)
+            q[:n] = -np.ascontiguousarray(moments.mu, dtype=np.float64)
+        update = {"Px": upper_data(self._p_dense), "q": q}
+        if self._mu_row is not None:
+            mu = np.ascontiguousarray(moments.mu, dtype=np.float64)
+            if mu.shape != (n,):
+                raise ValueError(f"expected return shape {mu.shape} != {(n,)}")
+            for column, value in enumerate(mu):
+                self._A.data[self._mu_slots[column]] = value
+            update["Ax"] = self._A.data
+        self._prob.update(**update)
         if warm and self._x is not None:
             self._prob.warm_start(x=self._x, y=self._y)
             self.n_warm_starts += 1
@@ -506,5 +529,5 @@ class MinVarianceOSQP:
                 raise RuntimeError(f"OSQP failed: {result.info.status}")
         self._x = np.asarray(result.x, dtype=np.float64)
         self._y = np.asarray(result.y, dtype=np.float64)
-        return self._x.copy()
+        return np.ascontiguousarray(self._x[:n], dtype=np.float64)
 

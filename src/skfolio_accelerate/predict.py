@@ -238,9 +238,18 @@ def cross_val_predict(
         return (pred, report) if return_report else pred
 
     if capabilities.can_compact and backend != "cvxpy-sequential":
-        spec = estimator_spec(estimator)
+        spec = estimator_spec(
+            estimator,
+            names=tuple(map(str, X.columns)) if hasattr(X, "columns") else None,
+        )
         keep_returns = spec.needs_returns()
-        shared = EngineCache(spec=spec) if cv_plan.kind == "mrc" and not keep_returns else None
+        share = (
+            cv_plan.kind == "mrc"
+            and not keep_returns
+            and spec.linear_constraints is None
+            and spec.groups is None
+        )
+        shared = EngineCache(spec=spec) if share else None
         try:
             merged = merge_batch_results(
                 [

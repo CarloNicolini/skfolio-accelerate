@@ -76,7 +76,7 @@ class LinearHighs:
         self.n_observations = int(n_observations)
         self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
         self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
-        self.budget = float(spec.budget)
+        self.budget = 1.0 if spec.budget is None else float(spec.budget)
         self.solver = Highs()
         self.solver.setOptionValue("output_flag", False)
         self.solver.setOptionValue("presolve", "off")

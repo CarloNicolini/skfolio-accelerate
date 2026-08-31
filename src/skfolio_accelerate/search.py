@@ -31,6 +31,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     params = list(ParameterGrid(param_grid))
     if not params:
         raise ValueError("param_grid produced no candidates")
+    names = tuple(map(str, X.columns)) if hasattr(X, "columns") else None
     specs = []
     for candidate_params in params:
         candidate = clone(estimator).set_params(**candidate_params)
@@ -40,7 +41,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
                 "grid_search only supports compact MeanRisk candidates; "
                 f"{candidate_params!r} is unsupported: {reason}"
             )
-        specs.append(estimator_spec(candidate))
+        specs.append(estimator_spec(candidate, names=names))
 
     started = time.perf_counter()
     x_arr = np.ascontiguousarray(X, dtype=np.float64)
@@ -68,7 +69,7 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
             moments_s += time.perf_counter() - t0
             for candidate_id, (spec, engine_cache) in enumerate(zip(specs, engines, strict=True)):
                 observations = moments.n_observations if spec.needs_returns() else None
-                engine = engine_cache.get(int(moments.mu.size), observations)
+                engine = engine_cache.get(int(moments.mu.size), observations, names=names)
                 t1 = time.perf_counter()
                 weights[candidate_id][fold.fold_id] = engine.solve(moments, warm=fold_index > 0)
                 solve_s += time.perf_counter() - t1
