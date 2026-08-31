@@ -2,6 +2,20 @@
 
 > **WARNING Experimental non-production library.** Hi, this is a human writing this warning. `skfolio-accelerate` is an ongoing fully AI-supported (almost 100% vibecoded) experiment I am doing in spare time. Despite being promising, I cannot guarantee on 1. correctness of results, 2. stability of the code, 3. other unknown unkowns which I am unaware of. Use at your own risk.
 
+## A short story (≈2 minutes)
+
+Late August 2026 I had a itch and a laptop. Walk-forward and multi-path skfolio backtests kept re-solving almost the same MeanRisk problem a few thousand times, and an early patch that saved ~5% of wall time felt… useless. So I opened Cursor agents from the desk and from the phone, and we started vibecoding toward a different question: *what if amortization, not more cores, is the way?*
+
+The first ah-ha was Amdahl in reverse. Compiling a fancier GridSearch barely moved the needle. The real tax was **massive sequential CV**—hundreds of overlapping windows, sometimes tens of thousands of path solves. Agents helped me say it out loud, then measure it: reuse Gram moments, keep one OSQP topology alive, warm-start fold to fold. Boxed variance jumped from “interesting” to **~50×** on long WalkForward. That is the moment I stopped asking *is this a toy?* and started asking *how far can we push it?*
+
+Then came the EqualWeighted surprise. A method with **no solver** was still much faster than native `cross_val_predict`. My first instinct was “measurement artifact.” Reading my own skeptical prompt back, with the agent’s breakdown beside it, flipped the story: clone, joblib wrapping `n_jobs=1`, DataFrame copies, and Portfolio construction *are* the CV tax. Sharing one compiled plan and assembling from `weights_` helps every serial estimator—not just Markowitz. The speedup was never only “a better QP.”
+
+We also learned by deleting. A 2,500-line sequential MeanRisk rewrite tried to cover every risk × option; I hit stop, and we cut it to a thin Parameterized CVXPY adapter that skfolio already owns. HiGHS earned a seat for boxed LPs; Clarabel for cones; OSQP stayed the variance champion. Benchmarks taught humility twice: first when historical CSVs lied across machines, then when we insisted on **same-runner main-vs-PR Δ%**. Agents draft fast; prompts that demand honesty keep the science intact.
+
+Beside this repo lives [`COSMO.rs`](https://github.com/carlonicolini/COSMO.rs)—my Rust port of Oxford’s COSMO—so a persistent ADMM workspace can update `P`/`q`/`A` between folds. Persistence cuts iterations; it does not (yet) beat naked OSQP on box+budget Markowitz. That is fine. The pair is the bet: **skfolio-accelerate** as the amortized CV front-end quants already know, **COSMO.rs** as the cone engine that remembers yesterday’s KKT. Together they aim at a de-facto standard for *very fast, very large* cross-validation and hyperparameter sweeps.
+
+Most of this was written by agents. Most of the judgment was reading my prompts again—and noticing when I was chasing coverage instead of speed, or speed instead of truth. If that is vibecoding, I will take it: a spare-time experiment that suddenly feels like a new way to invent infrastructure for quantitative research.
+
 `skfolio-accelerate` makes large skfolio backtests less repetitive.
 
 The only goal of this **experiment** is to understand how to squeeze the most performance from cross-validation with `skfolio` as I think that repeatedly solving independent problems in cross-validation like WalkForward with its highly sequential nature is a waste of CPU cycles.
