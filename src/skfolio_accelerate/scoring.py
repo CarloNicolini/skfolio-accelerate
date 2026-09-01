@@ -13,13 +13,11 @@ from skfolio_accelerate.moments import _contiguous_row_slice
 
 
 def path_sharpes(prediction) -> np.ndarray:
-    if isinstance(prediction, Population) or (
-        hasattr(prediction, "__len__") and not hasattr(prediction, "sharpe_ratio")
-    ):
+    if isinstance(prediction, Population):
         return np.asarray([ptf.sharpe_ratio for ptf in prediction], dtype=np.float64)
     if hasattr(prediction, "sharpe_ratio"):
         return np.asarray([prediction.sharpe_ratio], dtype=np.float64)
-    raise TypeError(f"Unsupported prediction type {type(prediction)!r}")
+    return np.asarray([ptf.sharpe_ratio for ptf in prediction], dtype=np.float64)
 
 
 def _ranking_inputs(reference, observed) -> tuple[np.ndarray, np.ndarray]:
@@ -123,8 +121,9 @@ def window_view(
 
 
 def _keep_frame_labels(X) -> bool:
-    index, columns = getattr(X, "index", None), getattr(X, "columns", None)
-    if index is None or columns is None:
+    try:
+        index, columns = X.index, X.columns
+    except AttributeError:
         return False
 
     def default_range(labels):

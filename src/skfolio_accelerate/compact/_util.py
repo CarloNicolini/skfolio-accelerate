@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import Any
 
 import clarabel
 import numpy as np
@@ -14,12 +13,19 @@ from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
 SCENARIO_RISKS = frozenset(
-    getattr(RiskMeasure, name)
-    for name in (
-        "SEMI_VARIANCE SEMI_DEVIATION MEAN_ABSOLUTE_DEVIATION "
-        "FIRST_LOWER_PARTIAL_MOMENT WORST_REALIZATION CVAR EVAR "
-        "MAX_DRAWDOWN AVERAGE_DRAWDOWN CDAR EDAR"
-    ).split()
+    {
+        RiskMeasure.SEMI_VARIANCE,
+        RiskMeasure.SEMI_DEVIATION,
+        RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+        RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        RiskMeasure.WORST_REALIZATION,
+        RiskMeasure.CVAR,
+        RiskMeasure.EVAR,
+        RiskMeasure.MAX_DRAWDOWN,
+        RiskMeasure.AVERAGE_DRAWDOWN,
+        RiskMeasure.CDAR,
+        RiskMeasure.EDAR,
+    }
 )
 
 
@@ -34,19 +40,19 @@ class MeanRiskSpec:
     evar_beta: float
     cdar_beta: float
     edar_beta: float
-    min_acceptable_return: Any
-    min_weights: Any
-    max_weights: Any
+    min_acceptable_return: object
+    min_weights: object
+    max_weights: object
     budget: float | None
     min_budget: float | None
     max_budget: float | None
     min_return: float | None
-    left_inequality: Any
-    right_inequality: Any
-    linear_constraints: Any
-    groups: Any
+    left_inequality: object
+    right_inequality: object
+    linear_constraints: object
+    groups: object
     asset_names: tuple[str, ...] | None
-    management_fees: Any
+    management_fees: object
     max_long: float | None
     max_short: float | None
 
@@ -105,7 +111,7 @@ def estimator_spec(estimator, *, names: tuple[str, ...] | None = None) -> MeanRi
 
 
 def as_bounds(
-    value: Any, n: int, default: float, *, names: tuple[str, ...] | None = None
+    value, n: int, default: float, *, names: tuple[str, ...] | None = None
 ) -> NDArray[np.float64]:
     if value is None:
         return np.full(n, default, dtype=np.float64)
@@ -124,7 +130,7 @@ def as_bounds(
 
 
 def fee_vector(
-    value: Any, n: int, *, names: tuple[str, ...] | None = None
+    value, n: int, *, names: tuple[str, ...] | None = None
 ) -> NDArray[np.float64]:
     return as_bounds(value, n, 0.0, names=names)
 
@@ -199,16 +205,12 @@ def diagonal_quadratic(
 def clarabel_settings() -> clarabel.DefaultSettings:
     settings = clarabel.DefaultSettings()
     settings.verbose = False
-    for name, value in (
-        ("presolve_enable", False),
-        ("chordal_decomposition_enable", False),
-        ("input_sparse_dropzeros", False),
-        ("max_threads", 1),
-        ("tol_gap_abs", 1e-9),
-        ("tol_gap_rel", 1e-9),
-    ):
-        if hasattr(settings, name):
-            setattr(settings, name, value)
+    settings.presolve_enable = False
+    settings.chordal_decomposition_enable = False
+    settings.input_sparse_dropzeros = False
+    settings.max_threads = 1
+    settings.tol_gap_abs = 1e-9
+    settings.tol_gap_rel = 1e-9
     return settings
 
 
@@ -217,10 +219,7 @@ def clarabel_try_update(solver, P, q, A, b, cones, *, update: dict) -> tuple:
     if solver is None:
         return clarabel.DefaultSolver(P, q, A, b, cones, settings), False
     try:
-        if (
-            hasattr(solver, "is_data_update_allowed")
-            and not solver.is_data_update_allowed()
-        ):
+        if not solver.is_data_update_allowed():
             raise RuntimeError("Clarabel data update is unavailable")
         solver.update(**update)
         return solver, True

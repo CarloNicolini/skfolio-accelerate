@@ -42,7 +42,7 @@ class FoldMoments:
 
 
 def is_default_empirical(estimator) -> bool:
-    prior = getattr(estimator, "prior_estimator", None)
+    prior = estimator.prior_estimator
     if prior is None:
         return True
     if type(prior).__name__ != "EmpiricalPrior":

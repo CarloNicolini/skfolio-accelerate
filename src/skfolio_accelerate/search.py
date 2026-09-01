@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from sklearn.base import clone
@@ -19,11 +18,11 @@ from skfolio_accelerate.scoring import assemble_prediction, path_sharpes_from_we
 
 @dataclass
 class GridSearchResult:
-    best_params_: dict[str, Any]
+    best_params_: dict
     best_score_: float
     best_index_: int
-    best_prediction_: Any
-    cv_results_: dict[str, Any]
+    best_prediction_: object
+    cv_results_: dict
     acceleration_report_: AccelerationReport
 
 
@@ -31,7 +30,11 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     params = list(ParameterGrid(param_grid))
     if not params:
         raise ValueError("param_grid produced no candidates")
-    names = tuple(map(str, X.columns)) if hasattr(X, "columns") else None
+    names = None
+    try:
+        names = tuple(map(str, X.columns))
+    except AttributeError:
+        pass
     specs = []
     for candidate_params in params:
         candidate = clone(estimator).set_params(**candidate_params)

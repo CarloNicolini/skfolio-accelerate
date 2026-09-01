@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import clarabel
 import numpy as np
 import osqp
@@ -176,7 +174,7 @@ class ScenarioClarabel(ClarabelEngine):
         self.weight_objective(q, self._moments)
         rows = zero + nonneg + (extra_rows or [])
         b = np.asarray(zero_b + nonneg_b + (extra_b or []), dtype=np.float64)
-        cones: list[Any] = [
+        cones = [
             clarabel.ZeroConeT(len(zero)),
             clarabel.NonnegativeConeT(len(nonneg)),
             *(extra_cones or []),

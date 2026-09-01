@@ -13,13 +13,13 @@ from skfolio.model_selection import cross_val_predict as skfolio_cross_val_predi
 from sklearn.base import clone
 
 from skfolio_accelerate._capabilities import (
-    _CLOSED_FORM_TYPES,
+    _CLOSED_FORM,
     BackendName,
     CallCapabilities,
-    _compact_backend_name,
     assemble_blocked_reason,
     blocked_reason,
     classify_call,
+    compact_backend_name,
     compact_blocked_reason,
     sequential_blocked_reason,
 )
@@ -344,7 +344,7 @@ def cross_val_predict(
         **native_kw,
     )
 
-    if capabilities.can_compact and type(estimator) in _CLOSED_FORM_TYPES:
+    if capabilities.can_compact and type(estimator) in _CLOSED_FORM:
         merged = merge_batch_results(
             [
                 closed_form_weights(
@@ -366,10 +366,11 @@ def cross_val_predict(
         return (pred, report) if return_report else pred
 
     if capabilities.can_compact and backend != "cvxpy-sequential":
-        spec = estimator_spec(
-            estimator,
-            names=tuple(map(str, X.columns)) if hasattr(X, "columns") else None,
-        )
+        try:
+            names = tuple(map(str, X.columns))
+        except AttributeError:
+            names = None
+        spec = estimator_spec(estimator, names=names)
         keep_returns = spec.needs_returns()
         share = (
             cv_plan.kind == "mrc"
@@ -413,7 +414,7 @@ def cross_val_predict(
             portfolio_params=portfolio_params,
             segment_params=_segment_params(estimator),
         )
-        backend_name: BackendName = _compact_backend_name(estimator)
+        backend_name = compact_backend_name(estimator)
         report = _report(
             backend_name,
             merged,

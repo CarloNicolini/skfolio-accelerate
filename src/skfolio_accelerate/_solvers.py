@@ -5,7 +5,6 @@ from __future__ import annotations
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -142,7 +141,7 @@ def closed_form_weights(X, folds, estimator, *, fold_blocks=None) -> FoldBatchRe
     )
 
 
-def _segment_params(estimator) -> dict[str, Any]:
+def _segment_params(estimator) -> dict:
     extra = dict(estimator.portfolio_params or {})
     state = estimator.__dict__
     for name in _PORTFOLIO_ATTRS:
@@ -173,7 +172,7 @@ def _train_target(y_arr, fold: FoldSpec, n_assets: int):
     return window_view(y_arr, fold.train_idx, cols)
 
 
-def _fold_fit_params(X, params, fold: FoldSpec) -> dict[str, Any]:
+def _fold_fit_params(X, params, fold: FoldSpec) -> dict:
     if not params:
         return {}
     fit_params = dict(params)
