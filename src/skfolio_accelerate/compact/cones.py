@@ -16,6 +16,7 @@ from skfolio_accelerate.compact._util import (
     as_bounds,
     clarabel_try_update,
     diagonal_quadratic,
+    fee_vector,
     identity,
     rows_to_csc,
     MeanRiskSpec,
@@ -446,6 +447,7 @@ class MinVarianceOSQP:
         self.n_assets = int(n_assets)
         self.l2 = float(spec.l2_coef)
         self.l1 = float(spec.l1_coef or 0.0)
+        self.fees = fee_vector(spec.management_fees, n_assets, names=spec.asset_names)
         self.objective = spec.objective
         self.risk_aversion = float(spec.risk_aversion)
         self._x = self._y = None
@@ -502,14 +504,15 @@ class MinVarianceOSQP:
         diagonal = np.diag_indices(n)
         self._p_dense[diagonal] += 2.0 * self.l2
         q = self._q
+        mu = np.ascontiguousarray(moments.mu, dtype=np.float64)
+        if mu.shape != (n,):
+            raise ValueError(f"expected return shape {mu.shape} != {(n,)}")
+        net_mu = mu - self.fees
         if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY:
-            q[:n] = -np.ascontiguousarray(moments.mu, dtype=np.float64)
+            q[:n] = -net_mu
         update = {"Px": upper_data(self._p_dense), "q": q}
         if self._mu_row is not None:
-            mu = np.ascontiguousarray(moments.mu, dtype=np.float64)
-            if mu.shape != (n,):
-                raise ValueError(f"expected return shape {mu.shape} != {(n,)}")
-            for column, value in enumerate(mu):
+            for column, value in enumerate(net_mu):
                 self._A.data[self._mu_slots[column]] = value
             update["Ax"] = self._A.data
         self._prob.update(**update)

@@ -47,6 +47,9 @@ class MeanRiskSpec:
     linear_constraints: Any
     groups: Any
     asset_names: tuple[str, ...] | None
+    management_fees: Any
+    max_long: float | None
+    max_short: float | None
 
     def needs_returns(self) -> bool:
         return self.objective is not ObjectiveFunction.MAXIMIZE_RETURN and self.risk_measure not in {
@@ -84,6 +87,9 @@ def estimator_spec(estimator, *, names: tuple[str, ...] | None = None) -> MeanRi
         linear_constraints=estimator.linear_constraints,
         groups=estimator.groups,
         asset_names=names,
+        management_fees=estimator.management_fees,
+        max_long=None if estimator.max_long is None else float(estimator.max_long),
+        max_short=None if estimator.max_short is None else float(estimator.max_short),
     )
 
 
@@ -104,6 +110,12 @@ def as_bounds(
     if arr.ndim == 0:
         return np.full(n, float(arr), dtype=np.float64)
     return np.ascontiguousarray(arr.reshape(n), dtype=np.float64)
+
+
+def fee_vector(
+    value: Any, n: int, *, names: tuple[str, ...] | None = None
+) -> NDArray[np.float64]:
+    return as_bounds(value, n, 0.0, names=names)
 
 
 @lru_cache(maxsize=32)

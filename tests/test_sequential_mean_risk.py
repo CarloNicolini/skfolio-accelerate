@@ -73,6 +73,33 @@ def test_auto_picks_osqp_for_return_limit():
     assert report.n_warm_starts >= 1
 
 
+def test_management_fees_and_min_std_use_osqp():
+    X = synthetic_returns(84, 5, seed=11)
+    cv = _walk_forward()
+    for estimator in (
+        MeanRisk(management_fees=1e-4, l2_coef=1e-5),
+        MeanRisk(max_long=2.0, l2_coef=1e-5),
+        MeanRisk(min_return=1e-5, management_fees=1e-4, l2_coef=1e-5),
+    ):
+        reference = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
+        observed, report = cross_val_predict(
+            estimator, X, cv=cv, n_jobs=1, return_report=True
+        )
+        np.testing.assert_allclose(
+            path_sharpes(observed), path_sharpes(reference), rtol=5e-3, atol=5e-4
+        )
+        assert report.backend == "osqp"
+
+
+def test_quadratic_risk_limit_stays_sequential():
+    X = synthetic_returns(72, 4, seed=12)
+    estimator = MeanRisk(max_variance=1.0, l2_coef=1e-5)
+    _, report = cross_val_predict(
+        estimator, X, cv=_walk_forward(), n_jobs=1, return_report=True
+    )
+    assert report.backend == "cvxpy-sequential"
+
+
 def test_linear_constraints_on_named_assets():
     raw = synthetic_returns(84, 4, seed=5)
     X = pd.DataFrame(raw, columns=["A0", "A1", "A2", "A3"])

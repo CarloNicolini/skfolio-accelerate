@@ -269,7 +269,10 @@ def cross_val_predict(
                 **fail_kw,
             )
             return (pred, report) if return_report else pred
-        pred, eval_s = _assemble(X, cv_plan, merged, name, portfolio_params=portfolio_params)
+        pred, eval_s = _assemble(
+            X, cv_plan, merged, name,
+            portfolio_params=portfolio_params, segment_params=_segment_params(estimator),
+        )
         backend_name: BackendName = _compact_backend_name(estimator)
         report = _report(backend_name, merged, eval_s=eval_s, reason=_choice_reason(backend_name, capabilities), wall_s=time.perf_counter() - t_wall)
         return (pred, report) if return_report else pred
