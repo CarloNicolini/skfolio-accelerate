@@ -26,13 +26,17 @@ def _ranking_inputs(reference, observed) -> tuple[np.ndarray, np.ndarray]:
     ref = np.asarray(reference, dtype=np.float64)
     obs = np.asarray(observed, dtype=np.float64)
     if ref.ndim != 1 or obs.ndim != 1 or ref.shape != obs.shape:
-        raise ValueError("reference and observed must be one-dimensional with equal size")
+        raise ValueError(
+            "reference and observed must be one-dimensional with equal size"
+        )
     if ref.size == 0 or not np.all(np.isfinite(ref)) or not np.all(np.isfinite(obs)):
         raise ValueError("ranking scores must be non-empty and finite")
     return ref, obs
 
 
-def ranking_precision_at_k(reference, observed, *, k: int, score_tolerance: float = 0.0) -> float:
+def ranking_precision_at_k(
+    reference, observed, *, k: int, score_tolerance: float = 0.0
+) -> float:
     ref, obs = _ranking_inputs(reference, observed)
     if not 1 <= k <= ref.size:
         raise ValueError(f"k must be between 1 and {ref.size}")
@@ -60,19 +64,26 @@ def _tolerant_ranks(values: np.ndarray, tolerance: float) -> np.ndarray:
     return ranks
 
 
-def spearman_rank_correlation(reference, observed, *, score_tolerance: float = 0.0) -> float:
+def spearman_rank_correlation(
+    reference, observed, *, score_tolerance: float = 0.0
+) -> float:
     ref, obs = _ranking_inputs(reference, observed)
     if ref.size < 2:
         raise ValueError("at least two portfolios are required")
     if score_tolerance < 0:
         raise ValueError("score_tolerance must be non-negative")
-    ranked_ref, ranked_obs = _tolerant_ranks(ref, score_tolerance), _tolerant_ranks(obs, score_tolerance)
+    ranked_ref, ranked_obs = (
+        _tolerant_ranks(ref, score_tolerance),
+        _tolerant_ranks(obs, score_tolerance),
+    )
     if np.ptp(ranked_ref) == 0 or np.ptp(ranked_obs) == 0:
         return float("nan")
     return float(np.corrcoef(ranked_ref, ranked_obs)[0, 1])
 
 
-def path_sharpes_from_weights(X, cv_plan: CVPlan, weights_by_fold: dict[int, NDArray[np.float64]]) -> np.ndarray:
+def path_sharpes_from_weights(
+    X, cv_plan: CVPlan, weights_by_fold: dict[int, NDArray[np.float64]]
+) -> np.ndarray:
     matrix = np.ascontiguousarray(X, dtype=np.float64)
     path_returns: list[list[NDArray[np.float64]]] = [[] for _ in range(cv_plan.n_paths)]
     for fold in cv_plan.folds:
@@ -98,9 +109,17 @@ def path_sharpes_from_weights(X, cv_plan: CVPlan, weights_by_fold: dict[int, NDA
     return sharpes
 
 
-def window_view(matrix: NDArray, rows: NDArray[np.intp], cols: NDArray[np.intp] | None = None) -> NDArray:
-    selector = _contiguous_row_slice(np.asarray(rows, dtype=np.intp)) or np.asarray(rows, dtype=np.intp)
-    return matrix[selector] if cols is None else matrix[selector][:, np.asarray(cols, dtype=np.intp)]
+def window_view(
+    matrix: NDArray, rows: NDArray[np.intp], cols: NDArray[np.intp] | None = None
+) -> NDArray:
+    selector = _contiguous_row_slice(np.asarray(rows, dtype=np.intp)) or np.asarray(
+        rows, dtype=np.intp
+    )
+    return (
+        matrix[selector]
+        if cols is None
+        else matrix[selector][:, np.asarray(cols, dtype=np.intp)]
+    )
 
 
 def _keep_frame_labels(X) -> bool:
@@ -109,7 +128,11 @@ def _keep_frame_labels(X) -> bool:
         return False
 
     def default_range(labels):
-        return type(labels).__name__ == "RangeIndex" and labels.start == 0 and labels.step == 1
+        return (
+            type(labels).__name__ == "RangeIndex"
+            and labels.start == 0
+            and labels.step == 1
+        )
 
     return not (default_range(index) and default_range(columns))
 
@@ -127,7 +150,9 @@ def _test_observations(X, idx, cols, *, x_np):
     return pd.DataFrame(values, index=X.index[row_sel], columns=columns)
 
 
-def make_segment_portfolio(X, weights, idx, cols=None, *, name="MeanRisk", x_np=None, segment_params=None):
+def make_segment_portfolio(
+    X, weights, idx, cols=None, *, name="MeanRisk", x_np=None, segment_params=None
+):
     matrix = np.ascontiguousarray(X, dtype=np.float64) if x_np is None else x_np
     extra = {} if segment_params is None else dict(segment_params)
     extra.pop("name", None)
@@ -141,14 +166,22 @@ def make_segment_portfolio(X, weights, idx, cols=None, *, name="MeanRisk", x_np=
 
 
 def assemble_prediction(
-    X, cv_plan: CVPlan, weights_by_fold, *, name="MeanRisk", portfolio_params=None, segment_params=None,
+    X,
+    cv_plan: CVPlan,
+    weights_by_fold,
+    *,
+    name="MeanRisk",
+    portfolio_params=None,
+    segment_params=None,
 ):
     extra = {} if portfolio_params is None else dict(portfolio_params)
     extra.setdefault("check_observations_order", False)
     x_np = np.ascontiguousarray(X, dtype=np.float64)
 
     def segment(w, idx, cols):
-        return make_segment_portfolio(X, w, idx, cols, name=name, x_np=x_np, segment_params=segment_params)
+        return make_segment_portfolio(
+            X, w, idx, cols, name=name, x_np=x_np, segment_params=segment_params
+        )
 
     if cv_plan.combinatorial or cv_plan.multi_path:
         path_lists: list[list[Portfolio]] = [[] for _ in range(cv_plan.n_paths)]
@@ -167,18 +200,23 @@ def assemble_prediction(
         return Population(
             [
                 MultiPeriodPortfolio(
-                    name=f"{pop_name}_{i}", portfolios=path_lists[i],
-                    check_observations_order=False, **extra,
+                    name=f"{pop_name}_{i}",
+                    portfolios=path_lists[i],
+                    check_observations_order=False,
+                    **extra,
                 )
                 for i in range(cv_plan.n_paths)
             ]
         )
-    ordered = sorted(cv_plan.folds, key=lambda f: int(f.test_idx[0]) if f.test_idx.size else 0)
+    ordered = sorted(
+        cv_plan.folds, key=lambda f: int(f.test_idx[0]) if f.test_idx.size else 0
+    )
     extra.pop("name", None)
     return MultiPeriodPortfolio(
         portfolios=[
             segment(weights_by_fold[fold.fold_id], fold.test_idx, fold.asset_idx)
-            for fold in ordered if fold.test_idx.size
+            for fold in ordered
+            if fold.test_idx.size
         ],
         **extra,
     )

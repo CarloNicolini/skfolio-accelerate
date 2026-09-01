@@ -13,13 +13,13 @@ from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
 from skfolio_accelerate.compact._util import (
+    MeanRiskSpec,
     as_bounds,
     clarabel_try_update,
     diagonal_quadratic,
     fee_vector,
     identity,
     rows_to_csc,
-    MeanRiskSpec,
     upper_csc,
     upper_data,
 )
@@ -27,14 +27,18 @@ from skfolio_accelerate.compact.constraints import compile_osqp_constraints
 from skfolio_accelerate.moments import FoldMoments
 
 
-def scenario_deviations(moments: FoldMoments, min_acceptable_return) -> NDArray[np.float64]:
+def scenario_deviations(
+    moments: FoldMoments, min_acceptable_return
+) -> NDArray[np.float64]:
     returns = np.asarray(moments.returns, dtype=np.float64)
     if min_acceptable_return is None:
         target = moments.mu
     elif np.isscalar(min_acceptable_return):
         target = float(min_acceptable_return)
     else:
-        target = np.asarray(min_acceptable_return, dtype=np.float64).reshape(moments.mu.size)
+        target = np.asarray(min_acceptable_return, dtype=np.float64).reshape(
+            moments.mu.size
+        )
     return np.ascontiguousarray(returns - target, dtype=np.float64)
 
 
@@ -156,7 +160,19 @@ class ScenarioClarabel(ClarabelEngine):
         self.n_observations = int(n_observations)
         self._scenario_slots = None
 
-    def _pack(self, nv, q, zero, zero_b, nonneg, nonneg_b, extra_rows=None, extra_b=None, extra_cones=None, P=None):
+    def _pack(
+        self,
+        nv,
+        q,
+        zero,
+        zero_b,
+        nonneg,
+        nonneg_b,
+        extra_rows=None,
+        extra_b=None,
+        extra_cones=None,
+        P=None,
+    ):
         self.weight_objective(q, self._moments)
         rows = zero + nonneg + (extra_rows or [])
         b = np.asarray(zero_b + nonneg_b + (extra_b or []), dtype=np.float64)
@@ -165,7 +181,13 @@ class ScenarioClarabel(ClarabelEngine):
             clarabel.NonnegativeConeT(len(nonneg)),
             *(extra_cones or []),
         ]
-        return P if P is not None else diagonal_quadratic(nv, self.n_assets, self.l2), q, rows_to_csc(rows, nv), b, cones
+        return (
+            P if P is not None else diagonal_quadratic(nv, self.n_assets, self.l2),
+            q,
+            rows_to_csc(rows, nv),
+            b,
+            cones,
+        )
 
     def _linear_problem(self, moments: FoldMoments):
         risk = self.spec.risk_measure
@@ -173,23 +195,32 @@ class ScenarioClarabel(ClarabelEngine):
         t, n = returns.shape
         lam = self.spec.risk_scale()
         zero, zero_b, nonneg, nonneg_b = self.weight_rows()
-        if risk in {RiskMeasure.MEAN_ABSOLUTE_DEVIATION, RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT}:
+        if risk in {
+            RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+            RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        }:
             nv = n + t
             q = np.zeros(nv, dtype=np.float64)
-            q[n:] = lam * (2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0) / t
+            q[n:] = (
+                lam * (2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0) / t
+            )
             deviations = scenario_deviations(moments, self.spec.min_acceptable_return)
             for k in range(t):
                 nonneg.append([(n + k, -1.0)])
                 nonneg_b.append(0.0)
             for k in range(t):
-                nonneg.append([(j, -float(deviations[k, j])) for j in range(n)] + [(n + k, -1.0)])
+                nonneg.append(
+                    [(j, -float(deviations[k, j])) for j in range(n)] + [(n + k, -1.0)]
+                )
                 nonneg_b.append(0.0)
         elif risk is RiskMeasure.WORST_REALIZATION:
             nv = n + 1
             q = np.zeros(nv, dtype=np.float64)
             q[n] = lam
             for k in range(t):
-                nonneg.append([(j, -float(returns[k, j])) for j in range(n)] + [(n, -1.0)])
+                nonneg.append(
+                    [(j, -float(returns[k, j])) for j in range(n)] + [(n, -1.0)]
+                )
                 nonneg_b.append(0.0)
         elif risk is RiskMeasure.CVAR:
             nv = n + 1 + t
@@ -264,12 +295,20 @@ class ScenarioClarabel(ClarabelEngine):
         for k in range(t):
             nonneg.append([(u0 + k, -1.0)])
             nonneg_b.append(0.0)
-            nonneg.append([(j, -float(deviations[k, j])) for j in range(n)] + [(u0 + k, -1.0)])
+            nonneg.append(
+                [(j, -float(deviations[k, j])) for j in range(n)] + [(u0 + k, -1.0)]
+            )
             nonneg_b.append(0.0)
         soc = [[(radius, -1.0)]] + [[(u0 + k, -1.0)] for k in range(t)]
         return self._pack(
-            nv, q, zero, zero_b, nonneg, nonneg_b,
-            extra_rows=soc, extra_b=[0.0] * (t + 1),
+            nv,
+            q,
+            zero,
+            zero_b,
+            nonneg,
+            nonneg_b,
+            extra_rows=soc,
+            extra_b=[0.0] * (t + 1),
             extra_cones=[clarabel.SecondOrderConeT(t + 1)],
         )
 
@@ -282,10 +321,15 @@ class ScenarioClarabel(ClarabelEngine):
         for k in range(t):
             nonneg.append([(n + k, -1.0)])
             nonneg_b.append(0.0)
-            nonneg.append([(j, -float(deviations[k, j])) for j in range(n)] + [(n + k, -1.0)])
+            nonneg.append(
+                [(j, -float(deviations[k, j])) for j in range(n)] + [(n + k, -1.0)]
+            )
             nonneg_b.append(0.0)
         diagonal = np.concatenate(
-            [np.full(n, 2.0 * self.l2), np.full(t, 2.0 * self.spec.risk_scale() / (t - 1))]
+            [
+                np.full(n, 2.0 * self.l2),
+                np.full(t, 2.0 * self.spec.risk_scale() / (t - 1)),
+            ]
         )
         return self._pack(
             nv, q, zero, zero_b, nonneg, nonneg_b, P=sp.diags(diagonal, format="csc")
@@ -325,8 +369,14 @@ class ScenarioClarabel(ClarabelEngine):
             expo.append([(y, -1.0)])
             expo.append([(z0 + k, -1.0)])
         return self._pack(
-            nv, q, zero, zero_b, nonneg, nonneg_b,
-            extra_rows=expo, extra_b=[0.0] * (3 * t),
+            nv,
+            q,
+            zero,
+            zero_b,
+            nonneg,
+            nonneg_b,
+            extra_rows=expo,
+            extra_b=[0.0] * (3 * t),
             extra_cones=[clarabel.ExponentialConeT() for _ in range(t)],
         )
 
@@ -342,20 +392,25 @@ class ScenarioClarabel(ClarabelEngine):
 
     def _scenario_binding(self, moments: FoldMoments):
         risk, n, t = self.spec.risk_measure, self.n_assets, self.n_observations
-        if risk in {RiskMeasure.MEAN_ABSOLUTE_DEVIATION, RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT}:
+        if risk in {
+            RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+            RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        }:
             return 1 + 2 * n + t + np.arange(t, dtype=np.intp), -scenario_deviations(
                 moments, self.spec.min_acceptable_return
             )
         if risk is RiskMeasure.WORST_REALIZATION:
-            return 1 + 2 * n + np.arange(t, dtype=np.intp), -np.asarray(moments.returns, dtype=np.float64)
+            return 1 + 2 * n + np.arange(t, dtype=np.intp), -np.asarray(
+                moments.returns, dtype=np.float64
+            )
         if risk is RiskMeasure.CVAR:
             return 1 + 2 * n + t + np.arange(t, dtype=np.intp), -np.asarray(
                 moments.returns, dtype=np.float64
             )
         if risk in {RiskMeasure.SEMI_VARIANCE, RiskMeasure.SEMI_DEVIATION}:
-            return 1 + 2 * n + 2 * np.arange(t, dtype=np.intp) + 1, -scenario_deviations(
-                moments, self.spec.min_acceptable_return
-            )
+            return 1 + 2 * n + 2 * np.arange(
+                t, dtype=np.intp
+            ) + 1, -scenario_deviations(moments, self.spec.min_acceptable_return)
         if risk is RiskMeasure.EVAR:
             return 2 + 2 * n + 3 * np.arange(t, dtype=np.intp), np.asarray(
                 moments.returns, dtype=np.float64
@@ -373,7 +428,9 @@ class ScenarioClarabel(ClarabelEngine):
             start, stop = int(self._A.indptr[column]), int(self._A.indptr[column + 1])
             column_rows = self._A.indices[start:stop]
             positions = np.searchsorted(column_rows, rows)
-            if np.any(positions == column_rows.size) or np.any(column_rows[positions] != rows):
+            if np.any(positions == column_rows.size) or np.any(
+                column_rows[positions] != rows
+            ):
                 raise RuntimeError("ScenarioClarabel sparse pattern is incomplete")
             slots[:, column] = start + positions
         self._scenario_slots = slots
@@ -383,7 +440,9 @@ class ScenarioClarabel(ClarabelEngine):
         if t != self.n_observations:
             self.n_observations = t
             self.solver = None
-            self._P = self._q = self._A = self._b = self._cones = self._scenario_slots = None
+            self._P = self._q = self._A = self._b = self._cones = (
+                self._scenario_slots
+            ) = None
         self._moments = moments
         if self._A is None:
             self._compile(moments)
@@ -426,7 +485,9 @@ class MaxReturnBox:
         upper = float(np.max(mu - 2.0 * self.l2 * self.min_w))
         for _ in range(64):
             multiplier = 0.5 * (lower + upper)
-            weights = np.clip((mu - multiplier) / (2.0 * self.l2), self.min_w, self.max_w)
+            weights = np.clip(
+                (mu - multiplier) / (2.0 * self.l2), self.min_w, self.max_w
+            )
             if float(weights.sum()) > self.budget:
                 lower = multiplier
             else:
@@ -434,7 +495,9 @@ class MaxReturnBox:
         residual = self.budget - float(weights.sum())
         if abs(residual) > tol:
             movable = np.flatnonzero(
-                weights < self.max_w - tol if residual > 0 else weights > self.min_w + tol
+                weights < self.max_w - tol
+                if residual > 0
+                else weights > self.min_w + tol
             )
             if movable.size:
                 weights[movable[0]] += residual
@@ -453,10 +516,10 @@ class MinVarianceOSQP:
         self._x = self._y = None
         self.n_warm_starts = 0
         n = n_assets
-        A, l, u, n_extra, mu_row, min_w, max_w = compile_osqp_constraints(spec, n)
+        A, lower, u, n_extra, mu_row, min_w, max_w = compile_osqp_constraints(spec, n)
         self.min_w, self.max_w = min_w, max_w
         self._A = A
-        self._l = l
+        self._l = lower
         self._u = u
         self._mu_row = mu_row
         self._mu_slots = []
@@ -465,7 +528,9 @@ class MinVarianceOSQP:
                 start, stop = int(A.indptr[column]), int(A.indptr[column + 1])
                 loc = np.flatnonzero(A.indices[start:stop] == mu_row)
                 if loc.size != 1:
-                    raise ValueError("min_return row must be dense in the weight columns")
+                    raise ValueError(
+                        "min_return row must be dense in the weight columns"
+                    )
                 self._mu_slots.append(start + int(loc[0]))
         nv = n + n_extra
         self._p_dense = np.empty((n, n), dtype=np.float64)
@@ -474,7 +539,11 @@ class MinVarianceOSQP:
             self._q[n:] = self.l1
         eye = identity(n)
         P_w = upper_csc(2.0 * (eye + self.l2 * eye + 1e-16 * np.ones((n, n))))
-        P = P_w if n_extra == 0 else sp.block_diag((P_w, sp.csc_matrix((n_extra, n_extra))), format="csc")
+        P = (
+            P_w
+            if n_extra == 0
+            else sp.block_diag((P_w, sp.csc_matrix((n_extra, n_extra))), format="csc")
+        )
         self._prob = osqp.OSQP()
         self._prob.setup(
             P=P,
@@ -533,4 +602,3 @@ class MinVarianceOSQP:
         self._x = np.asarray(result.x, dtype=np.float64)
         self._y = np.asarray(result.y, dtype=np.float64)
         return np.ascontiguousarray(self._x[:n], dtype=np.float64)
-

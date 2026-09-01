@@ -101,9 +101,15 @@ class LinearHighs:
         self._build_pattern()
 
     def _risk_scale(self) -> float:
-        return float(self.spec.risk_aversion) if self.spec.objective is ObjectiveFunction.MAXIMIZE_UTILITY else 1.0
+        return (
+            float(self.spec.risk_aversion)
+            if self.spec.objective is ObjectiveFunction.MAXIMIZE_UTILITY
+            else 1.0
+        )
 
-    def _store_matrix(self, starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper):
+    def _store_matrix(
+        self, starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper
+    ):
         self._cost, self._col_lower, self._col_upper = cost, col_lower, col_upper
         self._row_lower, self._row_upper = row_lower, row_upper
         self._a_start = np.asarray(starts, dtype=np.int32)
@@ -129,14 +135,30 @@ class LinearHighs:
         return starts, indices, values, r_nz, mu_nz
 
     def _build_pattern(self) -> None:
-        risk, n, t, lam = self.spec.risk_measure, self.n_assets, self.n_observations, self._risk_scale()
-        if risk in {RiskMeasure.MEAN_ABSOLUTE_DEVIATION, RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT}:
+        risk, n, t, lam = (
+            self.spec.risk_measure,
+            self.n_assets,
+            self.n_observations,
+            self._risk_scale(),
+        )
+        if risk in {
+            RiskMeasure.MEAN_ABSOLUTE_DEVIATION,
+            RiskMeasure.FIRST_LOWER_PARTIAL_MOMENT,
+        }:
             nv = n + 1 + t
             cost = np.zeros(nv, dtype=np.float64)
-            cost[n + 1 :] = lam * (2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0) / t
+            cost[n + 1 :] = (
+                lam * (2.0 if risk is RiskMeasure.MEAN_ABSOLUTE_DEVIATION else 1.0) / t
+            )
             col_lower, col_upper = np.zeros(nv), np.full(nv, kHighsInf)
-            col_lower[n], col_lower[:n], col_upper[:n] = -kHighsInf, self.min_w, self.max_w
-            starts, indices, values, r_nz, mu_nz = self._weight_scenario_cols(n, t, 2, extra_rows=(1,))
+            col_lower[n], col_lower[:n], col_upper[:n] = (
+                -kHighsInf,
+                self.min_w,
+                self.max_w,
+            )
+            starts, indices, values, r_nz, mu_nz = self._weight_scenario_cols(
+                n, t, 2, extra_rows=(1,)
+            )
             indices.append(1)
             values.append(1.0)
             for k in range(t):
@@ -151,7 +173,16 @@ class LinearHighs:
             row_lower[0] = row_upper[0] = self.budget
             row_upper[1] = 0.0
             self._mu_nz, self._r_nz = mu_nz, r_nz
-            self._store_matrix(starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper)
+            self._store_matrix(
+                starts,
+                indices,
+                values,
+                cost,
+                col_lower,
+                col_upper,
+                row_lower,
+                row_upper,
+            )
             return
         if risk is RiskMeasure.CVAR:
             nv = n + 1 + t
@@ -159,7 +190,11 @@ class LinearHighs:
             cost[n] = lam
             cost[n + 1 :] = lam / (t * (1.0 - float(self.spec.cvar_beta)))
             col_lower, col_upper = np.full(nv, -kHighsInf), np.full(nv, kHighsInf)
-            col_lower[:n], col_upper[:n], col_lower[n + 1 :] = self.min_w, self.max_w, 0.0
+            col_lower[:n], col_upper[:n], col_lower[n + 1 :] = (
+                self.min_w,
+                self.max_w,
+                0.0,
+            )
             starts, indices, values, r_nz, _ = self._weight_scenario_cols(n, t, 1)
             for k in range(t):
                 indices.append(1 + k)
@@ -172,7 +207,16 @@ class LinearHighs:
             row_lower, row_upper = np.zeros(1 + t), np.full(1 + t, kHighsInf)
             row_lower[0] = row_upper[0] = self.budget
             self._mu_nz, self._r_nz = None, r_nz
-            self._store_matrix(starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper)
+            self._store_matrix(
+                starts,
+                indices,
+                values,
+                cost,
+                col_lower,
+                col_upper,
+                row_lower,
+                row_upper,
+            )
             return
         if risk is RiskMeasure.WORST_REALIZATION:
             nv = n + 1
@@ -188,7 +232,16 @@ class LinearHighs:
             row_lower, row_upper = np.zeros(1 + t), np.full(1 + t, kHighsInf)
             row_lower[0] = row_upper[0] = self.budget
             self._mu_nz, self._r_nz = None, r_nz
-            self._store_matrix(starts, indices, values, cost, col_lower, col_upper, row_lower, row_upper)
+            self._store_matrix(
+                starts,
+                indices,
+                values,
+                cost,
+                col_lower,
+                col_upper,
+                row_lower,
+                row_upper,
+            )
             return
         raise ValueError(f"unsupported LP risk {risk}")
 

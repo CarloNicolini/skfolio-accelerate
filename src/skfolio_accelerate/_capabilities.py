@@ -188,7 +188,9 @@ def blocked_reason(estimator) -> str | None:
                 return "raise_on_failure=False is not compacted"
             if estimator.portfolio_params is not None:
                 return "estimator portfolio parameters are not compacted"
-            if type(estimator) is InverseVolatility and not is_default_empirical(estimator):
+            if type(estimator) is InverseVolatility and not is_default_empirical(
+                estimator
+            ):
                 return "custom prior is not compacted"
             return None
         case MeanRisk():
@@ -200,14 +202,20 @@ def blocked_reason(estimator) -> str | None:
                 if state[name] is None:
                     continue
                 if osqp and name in _OSQP_LINEAR:
-                    if name in {"min_budget", "max_budget"} and estimator.budget is not None:
+                    if (
+                        name in {"min_budget", "max_budget"}
+                        and estimator.budget is not None
+                    ):
                         return f"{name} is not compacted"
                     if name in {"max_short", "max_long"} and _allows_short(estimator):
                         return f"{name} is not compacted"
                     continue
                 return f"{name} is not compacted"
             if estimator.budget is None and not (
-                osqp and (estimator.min_budget is not None or estimator.max_budget is not None)
+                osqp
+                and (
+                    estimator.min_budget is not None or estimator.max_budget is not None
+                )
             ):
                 return "an unspecified equality budget is not compacted"
             if estimator.needs_previous_weights:
@@ -220,22 +228,24 @@ def blocked_reason(estimator) -> str | None:
                 and risk not in _RISKS
             ):
                 return "risk_measure is not compacted"
-            allowed = (
-                {"CLARABEL", "OSQP"}
-                if _osqp_qp(estimator)
-                else {"CLARABEL"}
-            )
+            allowed = {"CLARABEL", "OSQP"} if _osqp_qp(estimator) else {"CLARABEL"}
             if estimator.solver not in allowed:
                 return f"solver {estimator.solver!r} is not compacted for {risk.name}"
             if _nonzero(estimator.l1_coef) and not osqp:
                 return "l1_coef is not compacted"
-            if type(estimator.min_weights) is dict or type(estimator.max_weights) is dict:
+            if (
+                type(estimator.min_weights) is dict
+                or type(estimator.max_weights) is dict
+            ):
                 if not osqp:
                     return "dict weight bounds are not compacted"
             if type(estimator.min_acceptable_return) is dict:
                 return "dict minimum acceptable returns are not compacted"
             if osqp and estimator.min_return is not None:
-                if type(estimator.min_return) is dict or np.ndim(estimator.min_return) > 0:
+                if (
+                    type(estimator.min_return) is dict
+                    or np.ndim(estimator.min_return) > 0
+                ):
                     return "min_return is not compacted"
             if _nonzero(estimator.transaction_costs):
                 return "transaction costs are not compacted"
@@ -254,20 +264,53 @@ def blocked_reason(estimator) -> str | None:
             return f"estimator {type(estimator).__name__} is not MeanRisk"
 
 
-def compact_blocked_reason(estimator, *, y=None, method="predict", params=None, column_indices=None, entry_rebalancing_params=None, n_jobs=None, cv=None):
+def compact_blocked_reason(
+    estimator,
+    *,
+    y=None,
+    method="predict",
+    params=None,
+    column_indices=None,
+    entry_rebalancing_params=None,
+    n_jobs=None,
+    cv=None,
+):
     del y
-    return _call_blocked(
-        method=method, params=params, column_indices=column_indices,
-        entry_rebalancing_params=entry_rebalancing_params, cv=cv, n_jobs=n_jobs,
-        verb="compacted", allow_routed=False,
-    ) or continuation_unhelpful_reason(estimator, cv) or blocked_reason(estimator)
+    return (
+        _call_blocked(
+            method=method,
+            params=params,
+            column_indices=column_indices,
+            entry_rebalancing_params=entry_rebalancing_params,
+            cv=cv,
+            n_jobs=n_jobs,
+            verb="compacted",
+            allow_routed=False,
+        )
+        or continuation_unhelpful_reason(estimator, cv)
+        or blocked_reason(estimator)
+    )
 
 
-def assemble_blocked_reason(estimator, *, method="predict", params=None, column_indices=None, entry_rebalancing_params=None, n_jobs=None, cv=None):
+def assemble_blocked_reason(
+    estimator,
+    *,
+    method="predict",
+    params=None,
+    column_indices=None,
+    entry_rebalancing_params=None,
+    n_jobs=None,
+    cv=None,
+):
     if reason := _call_blocked(
-        method=method, params=params, column_indices=column_indices,
-        entry_rebalancing_params=entry_rebalancing_params, cv=cv, n_jobs=n_jobs,
-        verb="assembled from weights", allow_routed=True,
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        cv=cv,
+        n_jobs=n_jobs,
+        verb="assembled from weights",
+        allow_routed=True,
     ):
         return reason
     match estimator:
@@ -278,17 +321,34 @@ def assemble_blocked_reason(estimator, *, method="predict", params=None, column_
                 return "sequential previous_weights (costs, turnover, or fallback)"
             if estimator.raise_on_failure is not True:
                 return "raise_on_failure=False uses skfolio cross_val_predict"
-            if type(estimator) in _MEAN_RISK and estimator.efficient_frontier_size is not None:
+            if (
+                type(estimator) in _MEAN_RISK
+                and estimator.efficient_frontier_size is not None
+            ):
                 return "efficient_frontier_size uses skfolio cross_val_predict"
             return continuation_unhelpful_reason(estimator, cv)
         case _:
             return f"estimator {type(estimator).__name__} is not a portfolio optimizer"
 
 
-def sequential_blocked_reason(estimator, *, method="predict", params=None, column_indices=None, entry_rebalancing_params=None, n_jobs=None, cv=None):
+def sequential_blocked_reason(
+    estimator,
+    *,
+    method="predict",
+    params=None,
+    column_indices=None,
+    entry_rebalancing_params=None,
+    n_jobs=None,
+    cv=None,
+):
     reason = assemble_blocked_reason(
-        estimator, method=method, params=params, column_indices=column_indices,
-        entry_rebalancing_params=entry_rebalancing_params, n_jobs=n_jobs, cv=cv,
+        estimator,
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        n_jobs=n_jobs,
+        cv=cv,
     )
     if reason:
         return reason
@@ -301,7 +361,10 @@ def sequential_blocked_reason(estimator, *, method="predict", params=None, colum
         ("add_objective", "add_objective uses fit-assemble"),
         ("overwrite_expected_return", "overwrite_expected_return uses fit-assemble"),
         ("mu_uncertainty_set_estimator", "mu uncertainty sets use fit-assemble"),
-        ("covariance_uncertainty_set_estimator", "covariance uncertainty sets use fit-assemble"),
+        (
+            "covariance_uncertainty_set_estimator",
+            "covariance uncertainty sets use fit-assemble",
+        ),
         ("max_tracking_error", "tracking error is not parameterized"),
     ):
         if getattr(estimator, attr) is not None:
@@ -311,8 +374,24 @@ def sequential_blocked_reason(estimator, *, method="predict", params=None, colum
     return continuation_unhelpful_reason(estimator, cv)
 
 
-def classify_call(estimator, *, y=None, method="predict", params=None, column_indices=None, entry_rebalancing_params=None, n_jobs=None, cv=None):
-    kw = dict(method=method, params=params, column_indices=column_indices, entry_rebalancing_params=entry_rebalancing_params, cv=cv)
+def classify_call(
+    estimator,
+    *,
+    y=None,
+    method="predict",
+    params=None,
+    column_indices=None,
+    entry_rebalancing_params=None,
+    n_jobs=None,
+    cv=None,
+):
+    kw = dict(
+        method=method,
+        params=params,
+        column_indices=column_indices,
+        entry_rebalancing_params=entry_rebalancing_params,
+        cv=cv,
+    )
     return CallCapabilities(
         compact_reason=compact_blocked_reason(estimator, y=y, n_jobs=n_jobs, **kw),
         assemble_reason=assemble_blocked_reason(estimator, n_jobs=n_jobs, **kw),

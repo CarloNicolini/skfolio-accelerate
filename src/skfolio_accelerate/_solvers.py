@@ -20,7 +20,12 @@ from skfolio_accelerate.mean_risk_problem import SequentialProblemCache
 from skfolio_accelerate.moments import is_default_empirical, path_moment_session
 from skfolio_accelerate.scoring import window_view
 
-_PORTFOLIO_ATTRS = ("transaction_costs", "management_fees", "previous_weights", "risk_free_rate")
+_PORTFOLIO_ATTRS = (
+    "transaction_costs",
+    "management_fees",
+    "previous_weights",
+    "risk_free_rate",
+)
 
 
 @dataclass(slots=True)
@@ -53,11 +58,21 @@ def merge_batch_results(parts: Sequence[FoldBatchResult]) -> FoldBatchResult:
         if part.is_dpp is not None:
             is_dpp = part.is_dpp if is_dpp is None else bool(is_dpp and part.is_dpp)
     return FoldBatchResult(
-        weights, moments_s, solve_s, n_solves, n_warm, n_fits, n_updates, n_rebuilds, is_dpp,
+        weights,
+        moments_s,
+        solve_s,
+        n_solves,
+        n_warm,
+        n_fits,
+        n_updates,
+        n_rebuilds,
+        is_dpp,
     )
 
 
-def solve_compact_folds(session, folds, spec: MeanRiskSpec, *, engines=None) -> FoldBatchResult:
+def solve_compact_folds(
+    session, folds, spec: MeanRiskSpec, *, engines=None
+) -> FoldBatchResult:
     engines = EngineCache(spec=spec) if engines is None else engines
     weights = {}
     moments_s = solve_s = 0.0
@@ -81,9 +96,13 @@ def solve_compact_folds(session, folds, spec: MeanRiskSpec, *, engines=None) -> 
         weights[fold.fold_id] = engine.solve(moments, warm=i > 0)
         solve_s += time.perf_counter() - t1
     return FoldBatchResult(
-        weights, moments_s, solve_s, len(folds),
+        weights,
+        moments_s,
+        solve_s,
+        len(folds),
         0 if engine is None else engine.n_warm_starts - warm_before,
-        int(session.cache.n_fits), int(session.cache.n_updates),
+        int(session.cache.n_fits),
+        int(session.cache.n_updates),
     )
 
 
@@ -91,7 +110,8 @@ def closed_form_weights(X, folds, estimator, *, fold_blocks=None) -> FoldBatchRe
     inverse_vol = type(estimator) is InverseVolatility
     session = (
         path_moment_session(X, folds, keep_returns=False, fold_blocks=fold_blocks)
-        if inverse_vol else None
+        if inverse_vol
+        else None
     )
     if session is not None:
         n_assets = session.x_work.shape[1]
@@ -104,7 +124,9 @@ def closed_form_weights(X, folds, estimator, *, fold_blocks=None) -> FoldBatchRe
     for fold in folds:
         if session is None:
             weights[fold.fold_id] = (
-                rand_weights_dirichlet(n=n_assets) if draw_random else np.full(n_assets, 1.0 / n_assets)
+                rand_weights_dirichlet(n=n_assets)
+                if draw_random
+                else np.full(n_assets, 1.0 / n_assets)
             )
             continue
         started = time.perf_counter()
@@ -113,7 +135,8 @@ def closed_form_weights(X, folds, estimator, *, fold_blocks=None) -> FoldBatchRe
         inv = 1.0 / np.sqrt(np.diag(moments.covariance))
         weights[fold.fold_id] = inv / inv.sum()
     return FoldBatchResult(
-        weights, moments_s,
+        weights,
+        moments_s,
         n_prior_fits=0 if session is None else session.cache.n_fits,
         n_prior_updates=0 if session is None else session.cache.n_updates,
     )
@@ -136,7 +159,9 @@ def _train_slice(X, x_arr, fold: FoldSpec):
         rows = X.iloc[np.asarray(fold.train_idx)]
     except AttributeError:
         return window_view(x_arr, fold.train_idx, fold.asset_idx)
-    return rows.iloc[:, np.asarray(fold.asset_idx)] if fold.asset_idx is not None else rows
+    return (
+        rows.iloc[:, np.asarray(fold.asset_idx)] if fold.asset_idx is not None else rows
+    )
 
 
 def _train_target(y_arr, fold: FoldSpec, n_assets: int):
@@ -153,8 +178,12 @@ def _fold_fit_params(X, params, fold: FoldSpec) -> dict[str, Any]:
         return {}
     fit_params = dict(params)
     if fold.asset_idx is not None:
-        fit_params = _check_method_params(X, params=fit_params, indices=np.asarray(fold.asset_idx), axis=1)
-    return _check_method_params(X, params=fit_params, indices=np.asarray(fold.train_idx), axis=0)
+        fit_params = _check_method_params(
+            X, params=fit_params, indices=np.asarray(fold.asset_idx), axis=1
+        )
+    return _check_method_params(
+        X, params=fit_params, indices=np.asarray(fold.train_idx), axis=0
+    )
 
 
 def _fit_weights(fitted, X, x_arr, y_arr, fold, n_assets, params):
@@ -171,28 +200,37 @@ def _fit_weights(fitted, X, x_arr, y_arr, fold, n_assets, params):
     return np.ascontiguousarray(weights)
 
 
-def solve_sequential_folds(estimator, X, x_arr, y_arr, folds, *, cache=None, path_id=0, params=None):
+def solve_sequential_folds(
+    estimator, X, x_arr, y_arr, folds, *, cache=None, path_id=0, params=None
+):
     cache = SequentialProblemCache(estimator) if cache is None else cache
     adapter = cache.get(path_id)
     warm_before, rebuild_before = adapter.n_warm_starts, adapter.n_rebuilds
     weights, solve_s, n_assets = {}, 0.0, int(x_arr.shape[1])
     moment_session = (
         path_moment_session(x_arr, folds, keep_returns=True, keep_covariance=True)
-        if is_default_empirical(estimator) and not params else None
+        if is_default_empirical(estimator) and not params
+        else None
     )
     for fold in folds:
         started = time.perf_counter()
-        reused = moment_session is not None and adapter.fit_from_moments(moment_session.get(fold))
+        reused = moment_session is not None and adapter.fit_from_moments(
+            moment_session.get(fold)
+        )
         if reused:
             fitted = np.asarray(adapter.weights_, dtype=np.float64)
             if fitted.ndim != 1:
                 raise ValueError("2-dimensional weights_ cannot be assembled")
             weights[fold.fold_id] = np.ascontiguousarray(fitted)
         else:
-            weights[fold.fold_id] = _fit_weights(adapter, X, x_arr, y_arr, fold, n_assets, params)
+            weights[fold.fold_id] = _fit_weights(
+                adapter, X, x_arr, y_arr, fold, n_assets, params
+            )
         solve_s += time.perf_counter() - started
     return FoldBatchResult(
-        weights, solve_s=solve_s, n_solves=len(folds),
+        weights,
+        solve_s=solve_s,
+        n_solves=len(folds),
         n_warm_starts=adapter.n_warm_starts - warm_before,
         n_rebuilds=adapter.n_rebuilds - rebuild_before,
         is_dpp=adapter.is_dpp_,
@@ -203,6 +241,8 @@ def fit_native_weights(estimator, X, x_arr, y_arr, folds, *, params=None):
     n_assets, weights, solve_s = int(x_arr.shape[1]), {}, 0.0
     for fold in folds:
         started = time.perf_counter()
-        weights[fold.fold_id] = _fit_weights(clone(estimator), X, x_arr, y_arr, fold, n_assets, params)
+        weights[fold.fold_id] = _fit_weights(
+            clone(estimator), X, x_arr, y_arr, fold, n_assets, params
+        )
         solve_s += time.perf_counter() - started
     return FoldBatchResult(weights, solve_s=solve_s, n_solves=len(folds))

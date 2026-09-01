@@ -7,24 +7,33 @@ from dataclasses import dataclass
 from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
 
-from skfolio_accelerate.compact.cones import (
-    MaxReturnBox,
-    MinVarianceOSQP,
-    ScenarioClarabel,
-    StandardDeviationClarabel,
-)
 from skfolio_accelerate.compact._util import (
     SCENARIO_RISKS,
     MeanRiskSpec,
     as_bounds,
     estimator_spec,
 )
+from skfolio_accelerate.compact.cones import (
+    MaxReturnBox,
+    MinVarianceOSQP,
+    ScenarioClarabel,
+    StandardDeviationClarabel,
+)
+
+__all__ = [
+    "EngineCache",
+    "MeanRiskSpec",
+    "estimator_spec",
+    "make_compact_engine",
+]
 
 # Re-export the historical private name used by linear_lp.
 _as_bounds = as_bounds
 
 
-def make_compact_engine(spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None):
+def make_compact_engine(
+    spec: MeanRiskSpec, *, n_assets: int, n_observations: int | None
+):
     risk = spec.risk_measure
     if spec.objective is ObjectiveFunction.MAXIMIZE_RETURN:
         return MaxReturnBox(spec, n_assets)
@@ -51,10 +60,17 @@ class EngineCache:
     n_observations: int | None = None
     names: tuple[str, ...] | None = None
 
-    def get(self, n_assets: int, n_observations: int | None, names: tuple[str, ...] | None = None):
+    def get(
+        self,
+        n_assets: int,
+        n_observations: int | None,
+        names: tuple[str, ...] | None = None,
+    ):
         from dataclasses import replace
 
-        need_new = self.engine is None or n_assets != self.n_assets or names != self.names
+        need_new = (
+            self.engine is None or n_assets != self.n_assets or names != self.names
+        )
         if self.spec.needs_returns():
             need_new = need_new or n_observations != self.n_observations
         if need_new:

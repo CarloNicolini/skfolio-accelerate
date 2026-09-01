@@ -88,7 +88,9 @@ class ParametricMeanRisk(MeanRisk):
         state.returns.value = returns
         return state.returns @ w
 
-    def _cvx_min_acceptable_return(self, return_distribution, w, min_acceptable_return=None):
+    def _cvx_min_acceptable_return(
+        self, return_distribution, w, min_acceptable_return=None
+    ):
         ptf_returns = self._cvx_returns(return_distribution, w)
         if min_acceptable_return is None:
             return ptf_returns - self._cvx_expected_return(return_distribution, w)
@@ -113,7 +115,9 @@ class ParametricMeanRisk(MeanRisk):
         state.sqrt = params
         if cov_sqrt.diagonal is not None:
             diagonal = np.ascontiguousarray(cov_sqrt.diagonal, dtype=float)
-            state.sqrt_diag = self._parameter(state.sqrt_diag, diagonal.shape, "cov_diag")
+            state.sqrt_diag = self._parameter(
+                state.sqrt_diag, diagonal.shape, "cov_diag"
+            )
             state.sqrt_diag.value = diagonal
             terms.append(cp.multiply(state.sqrt_diag, w))
         else:
@@ -128,7 +132,9 @@ class ParametricMeanRisk(MeanRisk):
         if state.mu is not None and tuple(state.mu.shape) != tuple(mu.shape):
             return False
         returns = np.asarray(return_distribution.returns)
-        if state.returns is not None and tuple(state.returns.shape) != tuple(returns.shape):
+        if state.returns is not None and tuple(state.returns.shape) != tuple(
+            returns.shape
+        ):
             return False
         if state.sqrt:
             components = return_distribution.covariance_sqrt.components
@@ -145,7 +151,9 @@ class ParametricMeanRisk(MeanRisk):
         if state.mu is not None:
             state.mu.value = np.ascontiguousarray(return_distribution.mu, dtype=float)
         if state.returns is not None:
-            state.returns.value = np.ascontiguousarray(return_distribution.returns, dtype=float)
+            state.returns.value = np.ascontiguousarray(
+                return_distribution.returns, dtype=float
+            )
         if not state.sqrt:
             return
         cov_sqrt = return_distribution.covariance_sqrt
@@ -158,8 +166,12 @@ class ParametricMeanRisk(MeanRisk):
 
     def _solve_cached(self, state: _State) -> None:
         ConvexOptimization._solve_problem(
-            self, problem=state.problem, w=state.w, factor=state.factor,
-            parameters_values=state.parameters_values, expressions=state.expressions,
+            self,
+            problem=state.problem,
+            w=state.w,
+            factor=state.factor,
+            parameters_values=state.parameters_values,
+            expressions=state.expressions,
         )
 
     def fit_from_moments(self, moments: FoldMoments) -> bool:
@@ -180,20 +192,32 @@ class ParametricMeanRisk(MeanRisk):
     def _fit_prior(self, X, y, method: str, **fit_params) -> ReturnDistribution:
         routed = skm.process_routing(self, method, **fit_params)
         first = not hasattr(self, "prior_estimator_")
-        _ = skv.validate_data(self, X, skip_check_array=True, reset=first, ensure_all_finite="allow-nan")
+        _ = skv.validate_data(
+            self, X, skip_check_array=True, reset=first, ensure_all_finite="allow-nan"
+        )
         if first:
             self._validate_params(method=method)
             self._initialize()
-        _call_estimator(self.prior_estimator_, method, X, y, routed_params=routed.prior_estimator)
-        return self._prepare_investable_distribution(self.prior_estimator_.return_distribution_, slim=True)
+        _call_estimator(
+            self.prior_estimator_, method, X, y, routed_params=routed.prior_estimator
+        )
+        return self._prepare_investable_distribution(
+            self.prior_estimator_.return_distribution_, slim=True
+        )
 
-    def _solve_problem(self, problem, w, factor, parameters_values=None, expressions=None) -> None:
+    def _solve_problem(
+        self, problem, w, factor, parameters_values=None, expressions=None
+    ) -> None:
         params = dict(getattr(self, "_solver_params", None) or {})
         params.setdefault("warm_start", True)
         self._solver_params = params
         ConvexOptimization._solve_problem(
-            self, problem=problem, w=w, factor=factor,
-            parameters_values=parameters_values, expressions=expressions,
+            self,
+            problem=problem,
+            w=w,
+            factor=factor,
+            parameters_values=parameters_values,
+            expressions=expressions,
         )
         state = self._state()
         if state.problem is not problem:
@@ -210,7 +234,8 @@ class ParametricMeanRisk(MeanRisk):
         if state.problem is not None:
             distribution = self._fit_prior(X, y, method, **fit_params)
             loadings_block = (
-                distribution.factor_model is not None and self.linear_constraints is not None
+                distribution.factor_model is not None
+                and self.linear_constraints is not None
             )
             if (
                 distribution.sample_weight is None

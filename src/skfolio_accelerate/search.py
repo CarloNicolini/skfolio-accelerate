@@ -59,19 +59,30 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
                 if spec.needs_returns():
                     engines[candidate_id] = EngineCache(spec=spec)
         session = path_moment_session(
-            x_arr, folds, keep_returns=keep_returns,
-            keep_covariance=keep_covariance, fold_blocks=cv_plan.fold_blocks,
+            x_arr,
+            folds,
+            keep_returns=keep_returns,
+            keep_covariance=keep_covariance,
+            fold_blocks=cv_plan.fold_blocks,
         )
-        warm_before = [engine.engine.n_warm_starts if engine.engine else 0 for engine in engines]
+        warm_before = [
+            engine.engine.n_warm_starts if engine.engine else 0 for engine in engines
+        ]
         for fold_index, fold in enumerate(folds):
             t0 = time.perf_counter()
             moments = session.get(fold)
             moments_s += time.perf_counter() - t0
-            for candidate_id, (spec, engine_cache) in enumerate(zip(specs, engines, strict=True)):
+            for candidate_id, (spec, engine_cache) in enumerate(
+                zip(specs, engines, strict=True)
+            ):
                 observations = moments.n_observations if spec.needs_returns() else None
-                engine = engine_cache.get(int(moments.mu.size), observations, names=names)
+                engine = engine_cache.get(
+                    int(moments.mu.size), observations, names=names
+                )
                 t1 = time.perf_counter()
-                weights[candidate_id][fold.fold_id] = engine.solve(moments, warm=fold_index > 0)
+                weights[candidate_id][fold.fold_id] = engine.solve(
+                    moments, warm=fold_index > 0
+                )
                 solve_s += time.perf_counter() - t1
         n_prior_fits += session.cache.n_fits
         n_prior_updates += session.cache.n_updates
@@ -84,7 +95,9 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
     path_scores = np.vstack([path_sharpes_from_weights(X, cv_plan, w) for w in weights])
     mean_scores = np.mean(path_scores, axis=1)
     best_index = int(np.nanargmax(mean_scores))
-    best_prediction = assemble_prediction(X, cv_plan, weights[best_index], name=type(estimator).__name__)
+    best_prediction = assemble_prediction(
+        X, cv_plan, weights[best_index], name=type(estimator).__name__
+    )
     report = AccelerationReport(
         backend="compact-grid",
         n_solves=len(cv_plan.folds) * len(specs),
@@ -101,6 +114,10 @@ def grid_search(estimator, X, param_grid, cv=None, *, y=None) -> GridSearchResul
         best_score_=float(mean_scores[best_index]),
         best_index_=best_index,
         best_prediction_=best_prediction,
-        cv_results_={"params": params, "mean_test_score": mean_scores, "path_scores": path_scores},
+        cv_results_={
+            "params": params,
+            "mean_test_score": mean_scores,
+            "path_scores": path_scores,
+        },
         acceleration_report_=report,
     )
