@@ -46,7 +46,9 @@ def compile_osqp_constraints(spec: MeanRiskSpec, n: int):
     def add(block, lo, hi, *, weights_only: bool = True) -> None:
         matrix = sp.csc_matrix(np.asarray(block) if not sp.issparse(block) else block)
         if weights_only and n_extra:
-            matrix = sp.hstack([matrix, sp.csc_matrix((matrix.shape[0], n_extra))]).tocsc()
+            matrix = sp.hstack(
+                [matrix, sp.csc_matrix((matrix.shape[0], n_extra))]
+            ).tocsc()
         parts.append(matrix.tocsc())
         lower.append(np.atleast_1d(np.asarray(lo, dtype=np.float64)))
         upper.append(np.atleast_1d(np.asarray(hi, dtype=np.float64)))
@@ -74,7 +76,9 @@ def compile_osqp_constraints(spec: MeanRiskSpec, n: int):
     left, right = spec.left_inequality, spec.right_inequality
     if left is not None or right is not None:
         if left is None or right is None:
-            raise ValueError("left_inequality and right_inequality must be provided together")
+            raise ValueError(
+                "left_inequality and right_inequality must be provided together"
+            )
         left = np.asarray(left, dtype=np.float64)
         right = np.asarray(right, dtype=np.float64)
         if left.ndim != 2 or left.shape[1] != n:
@@ -92,7 +96,9 @@ def compile_osqp_constraints(spec: MeanRiskSpec, n: int):
         if len(a_eq):
             add(np.asarray(a_eq, dtype=np.float64), b_eq, b_eq)
         if len(a_ineq):
-            add(np.asarray(a_ineq, dtype=np.float64), np.full(len(b_ineq), -INF), b_ineq)
+            add(
+                np.asarray(a_ineq, dtype=np.float64), np.full(len(b_ineq), -INF), b_ineq
+            )
 
     mu_row = None
     if spec.min_return is not None:
@@ -101,4 +107,12 @@ def compile_osqp_constraints(spec: MeanRiskSpec, n: int):
 
     A = sp.vstack(parts, format="csc")
     A.sort_indices()
-    return A, np.concatenate(lower), np.concatenate(upper), n_extra, mu_row, min_w, max_w
+    return (
+        A,
+        np.concatenate(lower),
+        np.concatenate(upper),
+        n_extra,
+        mu_row,
+        min_w,
+        max_w,
+    )

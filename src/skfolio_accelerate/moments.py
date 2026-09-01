@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -48,10 +47,16 @@ def is_default_empirical(estimator) -> bool:
         return True
     if type(prior).__name__ != "EmpiricalPrior":
         return False
-    if prior.is_log_normal or prior.investment_horizon is not None or prior.max_history is not None:
+    if (
+        prior.is_log_normal
+        or prior.investment_horizon is not None
+        or prior.max_history is not None
+    ):
         return False
     mu, cov = prior.mu_estimator, prior.covariance_estimator
-    if mu is not None and (type(mu).__name__ != "EmpiricalMu" or mu.window_size is not None):
+    if mu is not None and (
+        type(mu).__name__ != "EmpiricalMu" or mu.window_size is not None
+    ):
         return False
     if cov is not None and (
         type(cov).__name__ != "EmpiricalCovariance"
@@ -71,12 +76,16 @@ def _finish_moments(mu, cov, returns, n_observations, *, keep_returns) -> FoldMo
             if cov is None
             else np.ascontiguousarray(0.5 * (cov + cov.T), dtype=np.float64)
         ),
-        returns=returns if keep_returns and returns is not None else np.empty((0, 0), dtype=np.float64),
+        returns=returns
+        if keep_returns and returns is not None
+        else np.empty((0, 0), dtype=np.float64),
         n_observations=int(n_observations),
     )
 
 
-def empirical_from_window(window: NDArray[np.float64], *, keep_returns: bool, ddof: int = 1) -> FoldMoments:
+def empirical_from_window(
+    window: NDArray[np.float64], *, keep_returns: bool, ddof: int = 1
+) -> FoldMoments:
     t, n = window.shape
     mu = np.mean(window, axis=0)
     if n == 1:
@@ -85,10 +94,14 @@ def empirical_from_window(window: NDArray[np.float64], *, keep_returns: bool, dd
         cov = np.cov(window, rowvar=False, ddof=ddof)
         if cov.ndim == 0:
             cov = cov.reshape(1, 1)
-    return _finish_moments(mu, cov, window if keep_returns else None, t, keep_returns=keep_returns)
+    return _finish_moments(
+        mu, cov, window if keep_returns else None, t, keep_returns=keep_returns
+    )
 
 
-def empirical_from_stats(n_obs, sum_vec, gram, *, returns, keep_returns, ddof: int = 1) -> FoldMoments:
+def empirical_from_stats(
+    n_obs, sum_vec, gram, *, returns, keep_returns, ddof: int = 1
+) -> FoldMoments:
     t = int(n_obs)
     mu = sum_vec / t
     cov = None if gram is None else (gram - np.outer(sum_vec, sum_vec) / t) / (t - ddof)
@@ -119,7 +132,9 @@ class _IndexState:
 
 
 class OverlapMomentCache:
-    def __init__(self, X, *, keep_returns, keep_covariance=True, ddof=1, fold_blocks=None) -> None:
+    def __init__(
+        self, X, *, keep_returns, keep_covariance=True, ddof=1, fold_blocks=None
+    ) -> None:
         self.X = np.ascontiguousarray(X, dtype=np.float64)
         self.keep_returns = keep_returns
         self.keep_covariance = keep_covariance
@@ -128,7 +143,11 @@ class OverlapMomentCache:
         self.n_updates = 0
         self._slide: dict[int, _SlideState] = {}
         self._indexed: dict[int, _IndexState] = {}
-        self._blocks = [self._stats_from_rows(rows) for rows in fold_blocks] if fold_blocks else None
+        self._blocks = (
+            [self._stats_from_rows(rows) for rows in fold_blocks]
+            if fold_blocks
+            else None
+        )
         if self._blocks:
             self.n_fits += len(self._blocks)
 
@@ -160,16 +179,21 @@ class OverlapMomentCache:
         if prev is None or prev.stop <= start or prev.start >= stop:
             window = self.X[start:stop]
             state = _SlideState(
-                start=start, stop=stop, n_obs=stop - start,
+                start=start,
+                stop=stop,
+                n_obs=stop - start,
                 sum_vec=window.sum(axis=0),
                 gram=window.T @ window if self.keep_covariance else None,
             )
             self._slide[path_key] = state
             self.n_fits += 1
             return empirical_from_stats(
-                state.n_obs, state.sum_vec, state.gram,
+                state.n_obs,
+                state.sum_vec,
+                state.gram,
                 returns=window if self.keep_returns else None,
-                keep_returns=self.keep_returns, ddof=self.ddof,
+                keep_returns=self.keep_returns,
+                ddof=self.ddof,
             )
         sum_vec, gram = prev.sum_vec, prev.gram
         if start > prev.start:
@@ -183,9 +207,12 @@ class OverlapMomentCache:
         self.n_updates += 1
         self._slide[path_key] = _SlideState(start, stop, stop - start, sum_vec, gram)
         return empirical_from_stats(
-            stop - start, sum_vec, gram,
+            stop - start,
+            sum_vec,
+            gram,
             returns=self.X[start:stop] if self.keep_returns else None,
-            keep_returns=self.keep_returns, ddof=self.ddof,
+            keep_returns=self.keep_returns,
+            ddof=self.ddof,
         )
 
     def _from_index_rows(self, rows, path_key) -> FoldMoments:
@@ -195,7 +222,8 @@ class OverlapMomentCache:
             if slide is not None:
                 previous = _IndexState(
                     rows=np.arange(slide.start, slide.stop, dtype=np.intp),
-                    sum_vec=slide.sum_vec, gram=slide.gram,
+                    sum_vec=slide.sum_vec,
+                    gram=slide.gram,
                 )
         if previous is not None:
             removed = np.setdiff1d(previous.rows, rows, assume_unique=True)
@@ -215,20 +243,28 @@ class OverlapMomentCache:
                 self._indexed[path_key] = _IndexState(rows, sum_vec, gram)
                 self.n_updates += 1
                 return empirical_from_stats(
-                    int(rows.size), sum_vec, gram,
+                    int(rows.size),
+                    sum_vec,
+                    gram,
                     returns=self.X[rows] if self.keep_returns else None,
-                    keep_returns=self.keep_returns, ddof=self.ddof,
+                    keep_returns=self.keep_returns,
+                    ddof=self.ddof,
                 )
         window = self.X[rows]
         state = _IndexState(
-            rows, window.sum(axis=0), window.T @ window if self.keep_covariance else None,
+            rows,
+            window.sum(axis=0),
+            window.T @ window if self.keep_covariance else None,
         )
         self._indexed[path_key] = state
         self.n_fits += 1
         return empirical_from_stats(
-            int(rows.size), state.sum_vec, state.gram,
+            int(rows.size),
+            state.sum_vec,
+            state.gram,
             returns=window if self.keep_returns else None,
-            keep_returns=self.keep_returns, ddof=self.ddof,
+            keep_returns=self.keep_returns,
+            ddof=self.ddof,
         )
 
     def _from_blocks(self, fold: FoldSpec) -> FoldMoments:
@@ -247,9 +283,12 @@ class OverlapMomentCache:
                 gram = gram - excluded.T @ excluded
         self.n_updates += 1
         return empirical_from_stats(
-            n_obs, sum_vec, gram,
+            n_obs,
+            sum_vec,
+            gram,
             returns=self.X[fold.train_idx] if self.keep_returns else None,
-            keep_returns=self.keep_returns, ddof=self.ddof,
+            keep_returns=self.keep_returns,
+            ddof=self.ddof,
         )
 
 
@@ -262,7 +301,9 @@ class PathMomentSession:
         return self.cache.get(fold, path_key=fold.path_id)
 
 
-def path_moment_session(X, folds, *, keep_returns, keep_covariance=True, fold_blocks=None) -> PathMomentSession:
+def path_moment_session(
+    X, folds, *, keep_returns, keep_covariance=True, fold_blocks=None
+) -> PathMomentSession:
     asset_idx = folds[0].asset_idx if folds else None
     if asset_idx is None:
         x_work, blocks = X, fold_blocks
@@ -270,7 +311,10 @@ def path_moment_session(X, folds, *, keep_returns, keep_covariance=True, fold_bl
         x_work, blocks = X[:, np.asarray(asset_idx, dtype=np.intp)], None
     return PathMomentSession(
         cache=OverlapMomentCache(
-            x_work, keep_returns=keep_returns, keep_covariance=keep_covariance, fold_blocks=blocks,
+            x_work,
+            keep_returns=keep_returns,
+            keep_covariance=keep_covariance,
+            fold_blocks=blocks,
         ),
         x_work=x_work,
     )

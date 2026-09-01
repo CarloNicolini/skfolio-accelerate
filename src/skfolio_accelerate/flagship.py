@@ -12,7 +12,9 @@ from skfolio.model_selection import (
 )
 
 
-def factor_returns(n_obs: int, n_assets: int, n_factors: int = 8, seed: int = 0) -> pd.DataFrame:
+def factor_returns(
+    n_obs: int, n_assets: int, n_factors: int = 8, seed: int = 0
+) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     factors = rng.normal(0.0, 0.01, size=(n_obs, n_factors))
     loadings = rng.normal(0.0, 1.0, size=(n_factors, n_assets))
@@ -21,18 +23,30 @@ def factor_returns(n_obs: int, n_assets: int, n_factors: int = 8, seed: int = 0)
 
 
 SMOKE_MRC = {
-    "n_obs": 420, "n_assets": 12, "n_subsamples": 4, "asset_subset_size": 6,
-    "window_size": 320, "train_size": 80, "test_size": 20, "seed": 2,
+    "n_obs": 420,
+    "n_assets": 12,
+    "n_subsamples": 4,
+    "asset_subset_size": 6,
+    "window_size": 320,
+    "train_size": 80,
+    "test_size": 20,
+    "seed": 2,
 }
 SMOKE_CPCV = {
-    "n_obs": 240, "n_assets": 8, "target_n_test_paths": 12, "target_train_size": 80, "seed": 3,
+    "n_obs": 240,
+    "n_assets": 8,
+    "target_n_test_paths": 12,
+    "target_train_size": 80,
+    "seed": 3,
 }
 
 
 def make_mrc(spec: dict) -> tuple[pd.DataFrame, MultipleRandomizedCV]:
     X = factor_returns(spec["n_obs"], spec["n_assets"], seed=spec["seed"])
     cv = MultipleRandomizedCV(
-        walk_forward=WalkForward(test_size=spec["test_size"], train_size=spec["train_size"]),
+        walk_forward=WalkForward(
+            test_size=spec["test_size"], train_size=spec["train_size"]
+        ),
         n_subsamples=spec["n_subsamples"],
         asset_subset_size=spec["asset_subset_size"],
         window_size=spec["window_size"],

@@ -105,7 +105,9 @@ def _compile_cpcv(splitter, X, y=None) -> CVPlan:
     folds = []
     for fold_id, (train, test_segments) in enumerate(splitter.split(X, y)):
         segments = tuple(np.asarray(seg, dtype=np.intp) for seg in test_segments)
-        concatenated = np.concatenate(segments) if segments else np.array([], dtype=np.intp)
+        concatenated = (
+            np.concatenate(segments) if segments else np.array([], dtype=np.intp)
+        )
         train_idx = np.asarray(train, dtype=np.intp)
         train_blocks = tuple(int(v) for v in np.unique(fold_of[train_idx]))
         excluded = np.setdiff1d(
@@ -139,7 +141,9 @@ def _compile_mrc(splitter, X, y=None) -> CVPlan:
     splits = list(splitter.split(X, y))
     path_ids = np.asarray(splitter.get_path_ids())
     folds = []
-    for fold_id, ((train, test, assets), path_id) in enumerate(zip(splits, path_ids, strict=True)):
+    for fold_id, ((train, test, assets), path_id) in enumerate(
+        zip(splits, path_ids, strict=True)
+    ):
         test_idx = np.asarray(test, dtype=np.intp)
         folds.append(
             FoldSpec(

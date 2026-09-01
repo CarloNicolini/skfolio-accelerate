@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from functools import lru_cache
 from typing import Any
-
-from dataclasses import dataclass
 
 import clarabel
 import numpy as np
@@ -52,13 +51,21 @@ class MeanRiskSpec:
     max_short: float | None
 
     def needs_returns(self) -> bool:
-        return self.objective is not ObjectiveFunction.MAXIMIZE_RETURN and self.risk_measure not in {
-            RiskMeasure.VARIANCE,
-            RiskMeasure.STANDARD_DEVIATION,
-        }
+        return (
+            self.objective is not ObjectiveFunction.MAXIMIZE_RETURN
+            and self.risk_measure
+            not in {
+                RiskMeasure.VARIANCE,
+                RiskMeasure.STANDARD_DEVIATION,
+            }
+        )
 
     def risk_scale(self) -> float:
-        return self.risk_aversion if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY else 1.0
+        return (
+            self.risk_aversion
+            if self.objective is ObjectiveFunction.MAXIMIZE_UTILITY
+            else 1.0
+        )
 
 
 def estimator_spec(estimator, *, names: tuple[str, ...] | None = None) -> MeanRiskSpec:
@@ -79,8 +86,12 @@ def estimator_spec(estimator, *, names: tuple[str, ...] | None = None) -> MeanRi
         min_weights=estimator.min_weights,
         max_weights=estimator.max_weights,
         budget=None if estimator.budget is None else float(estimator.budget),
-        min_budget=None if estimator.min_budget is None else float(estimator.min_budget),
-        max_budget=None if estimator.max_budget is None else float(estimator.max_budget),
+        min_budget=None
+        if estimator.min_budget is None
+        else float(estimator.min_budget),
+        max_budget=None
+        if estimator.max_budget is None
+        else float(estimator.max_budget),
         min_return=min_return,
         left_inequality=estimator.left_inequality,
         right_inequality=estimator.right_inequality,
@@ -167,7 +178,9 @@ def rows_to_csc(rows: list[list[tuple[int, float]]], n_variables: int) -> sp.csc
     return matrix
 
 
-def diagonal_quadratic(n_variables: int, n_assets: int, l2_coef: float) -> sp.csc_matrix:
+def diagonal_quadratic(
+    n_variables: int, n_assets: int, l2_coef: float
+) -> sp.csc_matrix:
     if l2_coef == 0:
         return sp.csc_matrix((n_variables, n_variables))
     indices = np.arange(n_assets, dtype=np.int32)
@@ -204,7 +217,10 @@ def clarabel_try_update(solver, P, q, A, b, cones, *, update: dict) -> tuple:
     if solver is None:
         return clarabel.DefaultSolver(P, q, A, b, cones, settings), False
     try:
-        if hasattr(solver, "is_data_update_allowed") and not solver.is_data_update_allowed():
+        if (
+            hasattr(solver, "is_data_update_allowed")
+            and not solver.is_data_update_allowed()
+        ):
             raise RuntimeError("Clarabel data update is unavailable")
         solver.update(**update)
         return solver, True
