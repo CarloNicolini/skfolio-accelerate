@@ -59,6 +59,10 @@ def compile_osqp_constraints(spec: MeanRiskSpec, n: int):
         lo = -INF if spec.min_budget is None else float(spec.min_budget)
         hi = INF if spec.max_budget is None else float(spec.max_budget)
         add(ones, lo, hi)
+    if spec.max_long is not None:
+        add(ones, -INF, float(spec.max_long))
+    if spec.max_short is not None and np.any(min_w < 0):
+        raise ValueError("max_short with short sales is not an OSQP box QP")
 
     if n_extra:
         eye = sp.eye(n, format="csc")

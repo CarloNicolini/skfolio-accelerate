@@ -69,17 +69,34 @@ _OSQP_LINEAR = frozenset(
         "min_return",
         "min_budget",
         "max_budget",
+        "max_long",
+        "max_short",
+        "scale_objective",
+        "scale_constraints",
     }
 )
 
 
-def _variance_osqp(estimator) -> bool:
-    return (
-        type(estimator) in _MEAN_RISK
-        and estimator.risk_measure is RiskMeasure.VARIANCE
-        and estimator.objective_function in _OBJECTIVES
-        and estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
-    )
+def _allows_short(estimator) -> bool:
+    weights = estimator.min_weights
+    if weights is None:
+        return False
+    if type(weights) is dict:
+        return any(float(value) < 0 for value in weights.values())
+    return bool(np.any(np.asarray(weights, dtype=float) < 0))
+
+
+def _osqp_qp(estimator) -> bool:
+    if type(estimator) not in _MEAN_RISK:
+        return False
+    if estimator.objective_function not in _OBJECTIVES:
+        return False
+    if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RETURN:
+        return False
+    risk = estimator.risk_measure
+    if risk is RiskMeasure.VARIANCE:
+        return True
+    return False
 
 
 @dataclass(frozen=True, slots=True)
@@ -178,12 +195,14 @@ def blocked_reason(estimator) -> str | None:
             if type(estimator) not in _MEAN_RISK:
                 return "MeanRisk subclasses are not compacted"
             state = estimator.__dict__
-            osqp = _variance_osqp(estimator)
+            osqp = _osqp_qp(estimator)
             for name in _COMPACT_NONE:
                 if state[name] is None:
                     continue
                 if osqp and name in _OSQP_LINEAR:
                     if name in {"min_budget", "max_budget"} and estimator.budget is not None:
+                        return f"{name} is not compacted"
+                    if name in {"max_short", "max_long"} and _allows_short(estimator):
                         return f"{name} is not compacted"
                     continue
                 return f"{name} is not compacted"
@@ -203,8 +222,7 @@ def blocked_reason(estimator) -> str | None:
                 return "risk_measure is not compacted"
             allowed = (
                 {"CLARABEL", "OSQP"}
-                if risk is RiskMeasure.VARIANCE
-                and estimator.objective_function is not ObjectiveFunction.MAXIMIZE_RETURN
+                if _osqp_qp(estimator)
                 else {"CLARABEL"}
             )
             if estimator.solver not in allowed:
@@ -219,13 +237,12 @@ def blocked_reason(estimator) -> str | None:
             if osqp and estimator.min_return is not None:
                 if type(estimator.min_return) is dict or np.ndim(estimator.min_return) > 0:
                     return "min_return is not compacted"
-            for attr, msg in (
-                ("transaction_costs", "transaction costs are not compacted"),
-                ("management_fees", "management fees are not compacted"),
-                ("risk_free_rate", "a non-zero risk-free rate is not compacted"),
-            ):
-                if _nonzero(getattr(estimator, attr)):
-                    return msg
+            if _nonzero(estimator.transaction_costs):
+                return "transaction costs are not compacted"
+            if _nonzero(estimator.management_fees) and not osqp:
+                return "management fees are not compacted"
+            if _nonzero(estimator.risk_free_rate) and not osqp:
+                return "a non-zero risk-free rate is not compacted"
             if estimator.raise_on_failure is not True:
                 return "raise_on_failure=False is not compacted"
             if estimator.save_problem:

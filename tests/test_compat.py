@@ -236,7 +236,7 @@ def test_fallback_estimators_assemble_from_native_fit():
         (HierarchicalRiskParity(), "fit-assemble"),
         (RiskBudgeting(), "fit-assemble"),
         (MeanRisk(min_return=1e-5), "osqp"),
-        (MeanRisk(management_fees=1e-4), "cvxpy-sequential"),
+        (MeanRisk(management_fees=1e-4), "osqp"),
         (MeanRisk(risk_measure=RiskMeasure.STANDARD_DEVIATION), "clarabel"),
     ):
         ref = skfolio_cv_predict(estimator, X, cv=cv, n_jobs=1)
