@@ -6,9 +6,12 @@ import numpy as np
 from highspy import Highs, HighsModelStatus, MatrixFormat, ObjSense, kHighsInf
 from numpy.typing import NDArray
 from skfolio import RiskMeasure
+from skfolio.model_selection import CombinatorialPurgedCV
+from skfolio.optimization import MeanRisk
 from skfolio.optimization.convex import ObjectiveFunction
 
-from skfolio_accelerate.compact import MeanRiskSpec, _as_bounds
+from skfolio_accelerate.compact import MeanRiskSpec
+from skfolio_accelerate.compact._util import as_bounds
 from skfolio_accelerate.moments import FoldMoments
 
 _LP_RISKS = frozenset(
@@ -37,9 +40,9 @@ def is_highs_lp_risk(spec: MeanRiskSpec) -> bool:
 
 
 def continuation_unhelpful_reason(estimator, cv) -> str | None:
-    if cv is None or type(cv).__name__ != "CombinatorialPurgedCV":
+    if cv is None or not isinstance(cv, CombinatorialPurgedCV):
         return None
-    if type(estimator).__name__ not in {"MeanRisk", "ParametricMeanRisk"}:
+    if not isinstance(estimator, MeanRisk):
         return None
     if float(estimator.l2_coef or 0.0) != 0.0:
         return None
@@ -74,8 +77,8 @@ class LinearHighs:
         self.spec = spec
         self.n_assets = int(n_assets)
         self.n_observations = int(n_observations)
-        self.min_w = _as_bounds(spec.min_weights, n_assets, 0.0)
-        self.max_w = _as_bounds(spec.max_weights, n_assets, 1.0)
+        self.min_w = as_bounds(spec.min_weights, n_assets, 0.0)
+        self.max_w = as_bounds(spec.max_weights, n_assets, 1.0)
         self.budget = 1.0 if spec.budget is None else float(spec.budget)
         self.solver = Highs()
         self.solver.setOptionValue("output_flag", False)
@@ -308,8 +311,8 @@ class LinearHighs:
         if t != self.n_observations or n != self.n_assets:
             self.n_observations = t
             self.n_assets = n
-            self.min_w = _as_bounds(self.spec.min_weights, n, 0.0)
-            self.max_w = _as_bounds(self.spec.max_weights, n, 1.0)
+            self.min_w = as_bounds(self.spec.min_weights, n, 0.0)
+            self.max_w = as_bounds(self.spec.max_weights, n, 1.0)
             self._basis = None
             self._returns = None
             self._built = False

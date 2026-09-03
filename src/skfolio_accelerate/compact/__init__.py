@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from skfolio import RiskMeasure
 from skfolio.optimization.convex import ObjectiveFunction
@@ -10,7 +10,6 @@ from skfolio.optimization.convex import ObjectiveFunction
 from skfolio_accelerate.compact._util import (
     SCENARIO_RISKS,
     MeanRiskSpec,
-    as_bounds,
     estimator_spec,
 )
 from skfolio_accelerate.compact.cones import (
@@ -26,9 +25,6 @@ __all__ = [
     "estimator_spec",
     "make_compact_engine",
 ]
-
-# Re-export the historical private name used by linear_lp.
-_as_bounds = as_bounds
 
 
 def make_compact_engine(
@@ -66,8 +62,6 @@ class EngineCache:
         n_observations: int | None,
         names: tuple[str, ...] | None = None,
     ):
-        from dataclasses import replace
-
         need_new = (
             self.engine is None or n_assets != self.n_assets or names != self.names
         )

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
 
 import cvxpy as cp
 import numpy as np
@@ -30,7 +29,7 @@ def as_parametric(estimator: MeanRisk) -> ParametricMeanRisk:
 class _State:
     problem: cp.Problem | None = None
     w: cp.Variable | None = None
-    factor: Any = None
+    factor = None
     parameters_values: list | None = None
     expressions: dict | None = None
     mu: cp.Parameter | None = None
@@ -45,20 +44,22 @@ class _State:
 class ParametricMeanRisk(MeanRisk):
     """MeanRisk that Parameterizes fold data and reuses ``cp.Problem``."""
 
+    _solver_params = None
+
     def _state(self) -> _State:
-        state = getattr(self, "_skacc_state", None)
-        if state is None:
-            state = _State()
-            self._skacc_state = state
-        return state
+        try:
+            return self._skacc_state
+        except AttributeError:
+            self._skacc_state = _State()
+            return self._skacc_state
 
     @property
     def n_warm_starts(self) -> int:
-        return int(self._state().n_warm_starts)
+        return self._state().n_warm_starts
 
     @property
     def n_rebuilds(self) -> int:
-        return int(self._state().n_rebuilds)
+        return self._state().n_rebuilds
 
     @property
     def last_problem(self) -> cp.Problem | None:
@@ -208,7 +209,7 @@ class ParametricMeanRisk(MeanRisk):
     def _solve_problem(
         self, problem, w, factor, parameters_values=None, expressions=None
     ) -> None:
-        params = dict(getattr(self, "_solver_params", None) or {})
+        params = dict(self._solver_params or {})
         params.setdefault("warm_start", True)
         self._solver_params = params
         ConvexOptimization._solve_problem(
@@ -226,7 +227,7 @@ class ParametricMeanRisk(MeanRisk):
         state.parameters_values, state.expressions = parameters_values, expressions
         try:
             state.is_dpp = bool(problem.is_dpp())
-        except Exception:
+        except ValueError:
             state.is_dpp = None
 
     def _fit(self, X, y=None, method: str = "fit", **fit_params):

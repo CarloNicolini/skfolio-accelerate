@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 import numpy as np
 from skfolio import RiskMeasure
@@ -57,7 +57,6 @@ _COMPACT_NONE = (
     "scale_constraints portfolio_params fallback"
 ).split()
 _CLOSED_FORM = (EqualWeighted, InverseVolatility, Random)
-_CLOSED_FORM_TYPES = _CLOSED_FORM
 _ROUTED = frozenset({"factors"})
 _MEAN_RISK = {MeanRisk, ParametricMeanRisk}
 _OSQP_LINEAR = frozenset(
@@ -93,10 +92,7 @@ def _osqp_qp(estimator) -> bool:
         return False
     if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RETURN:
         return False
-    risk = estimator.risk_measure
-    if risk is RiskMeasure.VARIANCE:
-        return True
-    return False
+    return estimator.risk_measure is RiskMeasure.VARIANCE
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,10 +137,7 @@ def compact_backend_name(estimator) -> BackendName:
     return "clarabel"
 
 
-_compact_backend_name = compact_backend_name
-
-
-def _nonzero(value: Any) -> bool:
+def _nonzero(value) -> bool:
     return bool(np.any(np.abs(np.asarray(value, dtype=float)) > 0))
 
 
@@ -168,7 +161,7 @@ def _call_blocked(
         return "column_indices uses skfolio cross_val_predict"
     if entry_rebalancing_params is not None:
         return "entry_rebalancing_params uses skfolio cross_val_predict"
-    if n_jobs is not ... and n_jobs not in (None, 1):
+    if n_jobs not in (None, 1):
         return "n_jobs!=1 uses skfolio cross_val_predict"
     if getattr(cv, "shuffle", False) is True:
         return "shuffled CV uses skfolio cross_val_predict"
@@ -356,19 +349,18 @@ def sequential_blocked_reason(
         return f"estimator {type(estimator).__name__} is not MeanRisk"
     if estimator.objective_function is ObjectiveFunction.MAXIMIZE_RATIO:
         return "MAXIMIZE_RATIO homogenization is not parameterized"
-    for attr, msg in (
-        ("add_constraints", "add_constraints uses fit-assemble"),
-        ("add_objective", "add_objective uses fit-assemble"),
-        ("overwrite_expected_return", "overwrite_expected_return uses fit-assemble"),
-        ("mu_uncertainty_set_estimator", "mu uncertainty sets use fit-assemble"),
-        (
-            "covariance_uncertainty_set_estimator",
-            "covariance uncertainty sets use fit-assemble",
-        ),
-        ("max_tracking_error", "tracking error is not parameterized"),
-    ):
-        if getattr(estimator, attr) is not None:
-            return msg
+    if estimator.add_constraints is not None:
+        return "add_constraints uses fit-assemble"
+    if estimator.add_objective is not None:
+        return "add_objective uses fit-assemble"
+    if estimator.overwrite_expected_return is not None:
+        return "overwrite_expected_return uses fit-assemble"
+    if estimator.mu_uncertainty_set_estimator is not None:
+        return "mu uncertainty sets use fit-assemble"
+    if estimator.covariance_uncertainty_set_estimator is not None:
+        return "covariance uncertainty sets use fit-assemble"
+    if estimator.max_tracking_error is not None:
+        return "tracking error is not parameterized"
     if estimator.fallback not in (None, "previous_weights"):
         return "fallback estimator uses skfolio cross_val_predict"
     return continuation_unhelpful_reason(estimator, cv)

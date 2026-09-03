@@ -1,6 +1,8 @@
 # skfolio-accelerate
 
-> **WARNING Experimental non-production library.** Hi, this is a human writing this warning. `skfolio-accelerate` is an ongoing fully AI-supported (almost 100% vibecoded) experiment I am doing in spare time. Despite being promising, I cannot guarantee on 1. correctness of results, 2. stability of the code, 3. other unknown unkowns which I am unaware of. Use at your own risk.
+![skfolio-accelerate for 50x your cross-validation workflow](docs/crossval_predict.png)
+
+> **WARNING Experimental non-production library.** Hi, this is a human writing this warning. `skfolio-accelerate` is an ongoing fully AI-supported (almost 100% vibecoded) experiment I am doing in spare time. Despite being promising, I cannot guarantee on 1. correctness of results, 2. stability of the code, 3. other unknown unkowns which I am unaware of. Use at your own risk. For the rest I promise it is pure fun!
 
 `skfolio-accelerate` makes large skfolio backtests less repetitive.
 
@@ -35,14 +37,16 @@ There are other few computational tricks to squeeze further CPU cycles:
 - boxed scenario LPs (MAD, CVaR, …) use a persistent HiGHS simplex basis;
 - other boxed scenario cones use a compact Clarabel problem;
 - other MeanRisk configurations reuse skfolio's own CVXPY problem
-  (`mu`, scenario returns, and covariance square-root are `cp.Parameter`);
+(`mu`, scenario returns, and covariance square-root are `cp.Parameter`);
 - every serial estimator shares one compiled CV plan, contiguous slices, and
-  assembly from `weights_` (skipping joblib, `safe_split` copies, and
-  `predict()`). That bookkeeping is independent of MeanRisk. Estimators with
-  trivial weights skip `fit`; the others still call native `fit` and then use
-  the same assembly unless the call needs sequential `previous_weights`, a
-  pipeline, parallel `n_jobs`, or another option that changes how `predict`
-  is called.
+assembly from `weights_` (skipping joblib, `safe_split` copies, and
+`predict()`). That bookkeeping is independent of MeanRisk. Estimators with
+trivial weights skip `fit`; the others still call native `fit` and then use
+the same assembly unless the call needs sequential `previous_weights`, a
+pipeline, parallel `n_jobs`, or another option that changes how `predict`
+is called.
+
+
 
 ## More in detail
 
@@ -54,8 +58,8 @@ Backtests repeatedly fit nearly identical portfolios. This package recognises th
 - It reuses skfolio's MeanRisk CVXPY graph across folds when extra options keep a fixed training length.
 - It scores compact hyperparameter candidates from weights before constructing the final portfolio objects.
 - It compiles the CV plan once and builds test portfolios from `weights_`.
-  That Python-side path (views instead of copies, no joblib, no per-fold
-  `predict()`) is shared by every serial estimator, not only MeanRisk.
+That Python-side path (views instead of copies, no joblib, no per-fold
+`predict()`) is shared by every serial estimator, not only MeanRisk.
 
 All reuse is local to one call. The package does not keep global caches of returns, estimators, fitted priors, or portfolios.
 
@@ -65,7 +69,7 @@ Leave `backend="auto"` uses the optimally found strategy for the given `MeanRisk
 The policy that comes from manually selected benchmarks, picks the best engine:
 
 1. analytic maximum-return / compact OSQP (boxed variance) / HiGHS (boxed LP) /
-   Clarabel (boxed scenario cones)
+  Clarabel (boxed scenario cones)
 2. Parameterized CVXPY reuse (`cvxpy-sequential`) for other MeanRisk configurations with a fixed training shape;
 3. serial assembly from `weights_` (native `fit` unless the weights are a trivial formula);
 4. unmodified skfolio.
@@ -126,12 +130,14 @@ print(result.best_score_)
 prediction = result.best_prediction_
 ```
 
+
+
 ## Benchmarks
 
 The canonical MeanRisk `cross_val_predict` suite lives in
-[`benchmark/`](benchmark/README.md). For PR performance claims, run **in-run
+`[benchmark/](benchmark/README.md)`. For PR performance claims, run **in-run
 relative** benchmarking (`main` then the PR on the same machine): see
-[`AGENTS.md`](AGENTS.md).
+`[AGENTS.md](AGENTS.md)`.
 
 ```bash
 python benchmark/run_relative.py --base origin/main --quick --workers 1
@@ -149,7 +155,7 @@ native when the training length changes.
 
 The tables below are **representative medians from one 20-year host**. They
 are not a PR timing baseline; coding agents must use in-run
-`benchmark/run_relative.py` (see [`AGENTS.md`](AGENTS.md)).
+`benchmark/run_relative.py` (see `[AGENTS.md](AGENTS.md)`).
 
 Engine labels in the first two tables follow the compact Clarabel path that
 was `auto` for scenario risks in that sweep. Boxed LPs (`l2_coef=0`) now
@@ -163,45 +169,51 @@ The large test is 5,040 × 20 synthetic daily returns, native `n_jobs=1`, one
 isolated process (Python 3.12, skfolio 1.0.0, seed 42). Geometric means over
 ok cells:
 
-| Engine | WalkForward (228) | MRC (480) | CPCV (6) |
-| --- | ---: | ---: | ---: |
-| OSQP | 50.0× (46.7–53.4, n=2) | 41.5× (35.7–48.2, n=2) | 11.0× (10.8–11.3, n=2) |
-| Clarabel | 2.32× (1.74–3.51, n=18) | 3.05× (2.28–4.54, n=18) | 0.95× (0.54–1.12, n=20) |
-| Sequential | 2.35× (1.74–2.94, n=23) | 2.19× (1.74–2.59, n=18) | 0.82× (0.09–2.82, n=23) |
+
+| Engine       | WalkForward (228)       | MRC (480)               | CPCV (6)                |
+| ------------ | ----------------------- | ----------------------- | ----------------------- |
+| OSQP         | 50.0× (46.7–53.4, n=2)  | 41.5× (35.7–48.2, n=2)  | 11.0× (10.8–11.3, n=2)  |
+| Clarabel     | 2.32× (1.74–3.51, n=18) | 3.05× (2.28–4.54, n=18) | 0.95× (0.54–1.12, n=20) |
+| Sequential   | 2.35× (1.74–2.94, n=23) | 2.19× (1.74–2.59, n=18) | 0.82× (0.09–2.82, n=23) |
 | Fit-assemble | 1.04× (0.71–1.20, n=14) | 1.12× (1.08–1.18, n=12) | 1.02× (0.94–1.16, n=13) |
-| All ok cells | 2.14× (n=57) | 2.36× (n=50) | 0.99× (n=58) |
+| All ok cells | 2.14× (n=57)            | 2.36× (n=50)            | 0.99× (n=58)            |
+
 
 Minimize-risk, same 20-year sample:
 
-| Risk | WalkForward (228) | MRC (480) | CPCV (6) | Engine |
-| --- | ---: | ---: | ---: | --- |
-| Variance | 46.7× | 48.2× | 10.8× | OSQP |
-| CVaR | 3.38× | 4.33× | 1.05× | Clarabel |
-| Worst realization | 2.54× | 3.51× | 0.91× | Clarabel |
-| MAD | 2.40× | 3.23× | 0.85× | Clarabel |
-| First lower partial moment | 2.35× | 3.31× | 0.96× | Clarabel |
-| Semi-variance | 2.29× | 3.05× | 0.97× | Clarabel |
-| Max drawdown | 2.11× | 2.62× | 1.07× | Clarabel |
-| CDaR | 2.07× | 2.46× | 0.94× | Clarabel |
-| Semi-deviation | 2.05× | 2.64× | 1.01× | Clarabel |
-| Average drawdown | 1.74× | 2.28× | 0.54× | Clarabel |
-| Standard deviation | 2.58× | 2.44× | 1.59× | Sequential |
-| Ulcer | 1.74× | 1.74× | 0.12× | Sequential |
-| EVaR | 0.71× | fail | 1.12× | Compact Clarabel retried native on WalkForward |
-| EDaR | fail | fail | fail | Native Clarabel `SolverError` |
+
+| Risk                       | WalkForward (228) | MRC (480) | CPCV (6) | Engine                                         |
+| -------------------------- | ----------------- | --------- | -------- | ---------------------------------------------- |
+| Variance                   | 46.7×             | 48.2×     | 10.8×    | OSQP                                           |
+| CVaR                       | 3.38×             | 4.33×     | 1.05×    | Clarabel                                       |
+| Worst realization          | 2.54×             | 3.51×     | 0.91×    | Clarabel                                       |
+| MAD                        | 2.40×             | 3.23×     | 0.85×    | Clarabel                                       |
+| First lower partial moment | 2.35×             | 3.31×     | 0.96×    | Clarabel                                       |
+| Semi-variance              | 2.29×             | 3.05×     | 0.97×    | Clarabel                                       |
+| Max drawdown               | 2.11×             | 2.62×     | 1.07×    | Clarabel                                       |
+| CDaR                       | 2.07×             | 2.46×     | 0.94×    | Clarabel                                       |
+| Semi-deviation             | 2.05×             | 2.64×     | 1.01×    | Clarabel                                       |
+| Average drawdown           | 1.74×             | 2.28×     | 0.54×    | Clarabel                                       |
+| Standard deviation         | 2.58×             | 2.44×     | 1.59×    | Sequential                                     |
+| Ulcer                      | 1.74×             | 1.74×     | 0.12×    | Sequential                                     |
+| EVaR                       | 0.71×             | fail      | 1.12×    | Compact Clarabel retried native on WalkForward |
+| EDaR                       | fail              | fail      | fail     | Native Clarabel `SolverError`                  |
+
 
 Sequential extras (WalkForward / CPCV; MRC skipped because named constraints
 fail on asset subsets and `min_return` can be infeasible on random windows):
 
-| Extra | WalkForward (228) | CPCV (6) |
-| --- | ---: | ---: |
-| Variance + `min_return` | 2.94× | 1.73× |
-| Variance + linear constraints | 2.82× | 1.68× |
-| Variance + L1 | 2.73× | 1.65× |
-| Variance + management fees | 2.68× | 1.60× |
-| CVaR + `min_return` | 2.12× | 0.97× |
-| Variance `MAXIMIZE_RETURN` | 2.74× | 1.65× |
-| Variance `MAXIMIZE_RATIO` | 1.15× | 1.16× |
+
+| Extra                         | WalkForward (228) | CPCV (6) |
+| ----------------------------- | ----------------- | -------- |
+| Variance + `min_return`       | 2.94×             | 1.73×    |
+| Variance + linear constraints | 2.82×             | 1.68×    |
+| Variance + L1                 | 2.73×             | 1.65×    |
+| Variance + management fees    | 2.68×             | 1.60×    |
+| CVaR + `min_return`           | 2.12×             | 0.97×    |
+| Variance `MAXIMIZE_RETURN`    | 2.74×             | 1.65×    |
+| Variance `MAXIMIZE_RATIO`     | 1.15×             | 1.16×    |
+
 
 `MAXIMIZE_RATIO` is fit-assemble on every risk that finished (~1.05–1.20×).
 Sequential CPCV rebuilds (5 of 6 folds) of Ulcer and of
@@ -216,12 +228,14 @@ Sharpe is the mean of path Sharpes. MAD/FLPM on CPCV are **not** accelerated
 (see warning above); the rows below for those cells are the HiGHS experiment
 that motivated the native fallback.
 
-| Risk | WalkForward (228) | MRC (288) | CPCV (15) | Engine |
-| --- | ---: | ---: | ---: | --- |
-| MAD | 6.5× | 6.8× | 0.51× (now native) | HiGHS / native |
-| First lower partial moment | 6.5× | 6.9× | 0.52× (now native) | HiGHS / native |
-| CVaR | 11.7× | 11.4× | 1.3× | HiGHS |
-| Worst realization | 12.6× | 13.5× | 3.6× | HiGHS |
+
+| Risk                       | WalkForward (228) | MRC (288) | CPCV (15)          | Engine         |
+| -------------------------- | ----------------- | --------- | ------------------ | -------------- |
+| MAD                        | 6.5×              | 6.8×      | 0.51× (now native) | HiGHS / native |
+| First lower partial moment | 6.5×              | 6.9×      | 0.52× (now native) | HiGHS / native |
+| CVaR                       | 11.7×             | 11.4×     | 1.3×               | HiGHS          |
+| Worst realization          | 12.6×             | 13.5×     | 3.6×               | HiGHS          |
+
 
 Mean path Sharpe matched native (typical Δ ~ 1e-6). Reproduce with
 `python benchmark/run_benchmark.py` (`include_lp_l2_zero` is on by default).
@@ -278,13 +292,15 @@ estimator = MeanRisk(
 )
 ```
 
+
+
 ## Provide your idea for speedup
 
 Reproducibility and relative speedup are enforced by using the provided `benchmark` that checks every combination of `MeanRisk`'s `ObjectiveFunction` and `RiskMeasure`, maintaining a SOTA over different git commits.
 
 ## Documentation
 
-See [`CHANGELOG.md`](CHANGELOG.md) for the 0.1.0 surface. To build the Sphinx
+See `[CHANGELOG.md](CHANGELOG.md)` for the 0.1.0 surface. To build the Sphinx
 site:
 
 ```bash
@@ -304,3 +320,4 @@ uv sync --extra dev
 source .venv/bin/activate
 pytest
 ```
+
