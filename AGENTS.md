@@ -22,7 +22,7 @@ HEAD, and always uses this checkout's `benchmark/` harness):
 
 ```bash
 python benchmark/run_relative.py --base origin/main --workers 1
-python benchmark/run_relative.py --base origin/main --quick --workers 1 --no-figures
+python benchmark/run_relative.py --base origin/main --quick --workers 1
 ```
 
 A single-SHA native vs accelerated sweep is still:
@@ -42,7 +42,7 @@ a PR-vs-main timing baseline. Do not paste those seconds against an older
 - Time `cross_val_predict` in a one-off snippet and treat that as the result.
 - Treat exploratory notebooks or one-off timers as the source of truth.
 - Upgrade dependencies to make a run look faster.
-- Treat Plotly `historical_speedup` figures as a PR gate.
+- Treat Plotly speed-up charts from other machines as a PR gate.
 
 Ordinary `pytest` must **not** execute the full sweep.
 `tests/test_benchmark_suite.py` covers harness math only.
@@ -65,7 +65,7 @@ thread caps, BLAS, failed cells, and whether `--quick` was used.
 
 ## Pointers
 
-- Driver: `benchmark/run_relative.py`, `benchmark/run_benchmark.py`
+- Driver: `benchmark/run_relative.py`, `benchmark/run_benchmark.py`, `python -m benchmark`
 - Protocol: `benchmark/README.md`, `benchmark/config.py`
 - In-run outputs: `benchmark/results/relative/<date>_<head-sha>/`
   (`base/`, `head/`, `delta.csv`, `summary.md`)

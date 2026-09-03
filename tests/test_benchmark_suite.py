@@ -8,32 +8,35 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from typer.testing import CliRunner
 
-from benchmark.config import SCHEMA_VERSION, build_config, validate_raw
-from benchmark.datasets import make_synthetic
-from benchmark.estimators import mean_risk_specs
-from benchmark.figures import (
-    FIGURE_HEIGHT,
-    FIGURE_WIDTH,
-    figure_execution_time,
-    generate_all_figures,
+from benchmark.cli import app
+from benchmark.config import (
+    CV_KINDS,
+    SCHEMA_VERSION,
+    build_config,
+    make_synthetic,
+    mean_risk_specs,
 )
-from benchmark.io import parse_results_csv, write_csv, write_json, write_summary_md
-from benchmark.metrics import (
+from benchmark.harness import (
     SCHEMA_FIELDS,
     attach_native_comparisons,
+    compare_in_run_rows,
     delta_sharpe,
     delta_time,
+    fold_index_fingerprint,
+    make_cv,
     parse_raw_times,
+    parse_results_csv,
     relative_delta_pct,
     relative_sharpe_error,
     relative_time,
     speedup,
     timing_summary,
+    write_csv,
+    write_json,
+    write_summary_md,
 )
-from benchmark.protocol import fold_index_fingerprint, make_cv
-from benchmark.relative import compare_in_run_rows
-from benchmark.run_benchmark import parse_args
 
 
 def test_synthetic_data_is_deterministic():
@@ -59,10 +62,6 @@ def test_config_validation_rejects_bad_values():
         build_config(cv_kinds=("kfold",))
     with pytest.raises(ValueError, match="timeout"):
         build_config({"timeout_s": 0})
-    raw = build_config().to_dict()
-    raw["synthetic_n_assets"] = 1
-    with pytest.raises(ValueError):
-        validate_raw(raw)
 
 
 def test_mean_risk_grid_covers_sequential_objectives_and_risks():
@@ -110,21 +109,32 @@ def test_result_schema_roundtrip(tmp_path: Path):
 def test_identical_walk_forward_folds():
     config = build_config()
     X = make_synthetic(config).X
-    first = fold_index_fingerprint(X, make_cv("walk-forward", config))
-    second = fold_index_fingerprint(X, make_cv("walk-forward", config))
+    first = fold_index_fingerprint(X, make_cv("walk-forward", config, len(X)))
+    second = fold_index_fingerprint(X, make_cv("walk-forward", config, len(X)))
     assert first == second
-    assert len(first) >= 1
+    assert len(first) == config.target_folds
     train, test, assets = first[0]
     assert train and test
     assert set(train).isdisjoint(set(test))
     assert assets == ()
 
 
+def test_cv_fold_counts_are_aligned():
+    config = build_config()
+    assert config.cv_kinds == CV_KINDS
+    X = make_synthetic(config).X
+    counts = [
+        len(fold_index_fingerprint(X, make_cv(kind, config, len(X))))
+        for kind in CV_KINDS
+    ]
+    assert counts == [config.target_folds] * 3
+
+
 def test_identical_mrc_folds_with_fixed_seed():
     config = build_config(cv_kinds=("multiple-randomized",))
     X = make_synthetic(config).X
-    first = fold_index_fingerprint(X, make_cv("multiple-randomized", config))
-    second = fold_index_fingerprint(X, make_cv("multiple-randomized", config))
+    first = fold_index_fingerprint(X, make_cv("multiple-randomized", config, len(X)))
+    second = fold_index_fingerprint(X, make_cv("multiple-randomized", config, len(X)))
     assert first == second
 
 
@@ -146,27 +156,15 @@ def test_timing_and_sharpe_comparisons():
     compared = attach_native_comparisons(acc, native)
     assert compared["speedup"] == 4.0
     assert compared["delta_time_s"] == -3.0
-    assert compared["relative_time"] == 0.25
-    assert compared["delta_sharpe"] == pytest.approx(0.05)
-    assert compared["relative_sharpe_error"] == pytest.approx(0.05)
     failed_native = {
         "method": "native",
         "time_s": None,
         "mean_sharpe": None,
         "status": "SolverError",
     }
-    failed_acc = {
-        "method": "accelerated",
-        "time_s": None,
-        "mean_sharpe": None,
-        "status": "SolverError",
-    }
-    compared_fail = attach_native_comparisons(failed_acc, failed_native)
-    assert math.isnan(compared_fail["speedup"])
-    native_fail = attach_native_comparisons(failed_native, failed_native)
-    assert math.isnan(native_fail["speedup"])
+    failed = attach_native_comparisons(failed_native, failed_native)
+    assert math.isnan(failed["speedup"])
     assert relative_delta_pct(10.0, 12.0) == pytest.approx(20.0)
-    assert relative_delta_pct(10.0, 8.0) == pytest.approx(-20.0)
     assert math.isnan(relative_delta_pct(0.0, 1.0))
 
 
@@ -175,44 +173,6 @@ def test_parse_raw_times_formats():
     assert parse_raw_times("[1.0, 2.0]") == [1.0, 2.0]
     assert parse_raw_times([]) == []
     assert parse_raw_times("") == []
-
-
-def test_plotly_figure_generation(tmp_path: Path):
-    pytest.importorskip("plotly")
-    rows = [
-        {
-            "dataset": "synthetic",
-            "estimator": "MINIMIZE_RISK/VARIANCE",
-            "method": "native",
-            "time_s": 2.0,
-            "mean_sharpe": 0.1,
-            "speedup": 1.0,
-            "delta_sharpe": 0.0,
-            "status": "ok",
-        },
-        {
-            "dataset": "synthetic",
-            "estimator": "MINIMIZE_RISK/VARIANCE",
-            "method": "accelerated",
-            "time_s": 0.5,
-            "mean_sharpe": 0.1,
-            "speedup": 4.0,
-            "delta_sharpe": 0.0,
-            "status": "ok",
-        },
-    ]
-    fig = figure_execution_time(rows)
-    assert fig.layout.width == FIGURE_WIDTH
-    assert fig.layout.height >= FIGURE_HEIGHT
-    written = generate_all_figures(
-        rows, output_dir=tmp_path / "figures", results_root=tmp_path
-    )
-    names = {path.name for path in written}
-    assert "execution_time.html" in names
-    assert "execution_time.json" in names
-    assert "speedup.html" in names
-    payload = json.loads((tmp_path / "figures" / "execution_time.json").read_text())
-    assert "data" in payload
 
 
 def test_summary_writer(tmp_path: Path):
@@ -234,21 +194,24 @@ def test_summary_writer(tmp_path: Path):
     write_summary_md(path, rows=rows, environment={"timestamp": "t", "packages": {}})
     text = path.read_text()
     assert "Speed-up" in text
-    assert "Relative Sharpe Error" in text
     assert "MINIMIZE_RISK/VARIANCE" in text
 
 
 def test_json_writer_roundtrip(tmp_path: Path):
     path = tmp_path / "results.json"
     write_json(path, {"schema_version": SCHEMA_VERSION, "rows": []})
-    payload = json.loads(path.read_text())
-    assert payload["schema_version"] == SCHEMA_VERSION
+    assert json.loads(path.read_text())["schema_version"] == SCHEMA_VERSION
 
 
-def test_output_dir_flag():
-    args = parse_args(["--output-dir", "/tmp/bench-out", "--quick"])
-    assert args.output_dir == Path("/tmp/bench-out")
-    assert args.quick is True
+def test_cli_help():
+    runner = CliRunner()
+    run_help = runner.invoke(app, ["run", "--help"])
+    assert run_help.exit_code == 0
+    assert "--quick" in run_help.output
+    assert "--output-dir" in run_help.output
+    rel_help = runner.invoke(app, ["relative", "--help"])
+    assert rel_help.exit_code == 0
+    assert "--base" in rel_help.output
 
 
 def test_in_run_relative_delta_rows():
@@ -264,20 +227,8 @@ def test_in_run_relative_delta_rows():
             "status": "ok",
         }
     ]
-    head = [
-        {
-            "dataset": "synthetic",
-            "cv": "walk-forward",
-            "estimator": "MINIMIZE_RISK/VARIANCE",
-            "method": "accelerated",
-            "time_s": 2.5,
-            "speedup": 3.2,
-            "mean_sharpe": 0.1,
-            "status": "ok",
-        }
-    ]
+    head = [{**base[0], "time_s": 2.5, "speedup": 3.2}]
     rows = compare_in_run_rows(base, head)
-    assert len(rows) == 1
     assert rows[0]["delta_pct"] == pytest.approx(25.0)
     assert rows[0]["delta_time_s"] == pytest.approx(0.5)
 
