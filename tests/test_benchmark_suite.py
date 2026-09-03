@@ -205,13 +205,15 @@ def test_json_writer_roundtrip(tmp_path: Path):
 
 def test_cli_help():
     runner = CliRunner()
-    run_help = runner.invoke(app, ["run", "--help"])
+    env = {"COLUMNS": "200", "TERM": "dumb", "NO_COLOR": "1"}
+    run_help = runner.invoke(app, ["run", "--help"], env=env, color=False)
     assert run_help.exit_code == 0
-    assert "--quick" in run_help.output
-    assert "--output-dir" in run_help.output
-    rel_help = runner.invoke(app, ["relative", "--help"])
+    run_text = run_help.output.replace("\n", "")
+    assert "--quick" in run_text
+    assert "--output-dir" in run_text
+    rel_help = runner.invoke(app, ["relative", "--help"], env=env, color=False)
     assert rel_help.exit_code == 0
-    assert "--base" in rel_help.output
+    assert "--base" in rel_help.output.replace("\n", "")
 
 
 def test_in_run_relative_delta_rows():

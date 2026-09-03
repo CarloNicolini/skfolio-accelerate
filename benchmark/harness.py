@@ -316,9 +316,7 @@ def validate_prediction(prediction, *, report=None, reference_prediction=None) -
     n_invalid = int(np.size(sharpes) - np.isfinite(sharpes).sum())
     n_nonfinite_w = sum(int(np.size(w) - np.isfinite(w).sum()) for w in weights)
     status = (
-        "invalid_output"
-        if n_invalid or n_nonfinite_w or prediction is None
-        else "ok"
+        "invalid_output" if n_invalid or n_nonfinite_w or prediction is None else "ok"
     )
     max_abs_w = max_abs_sharpe = float("nan")
     if reference_prediction is not None:
@@ -409,7 +407,7 @@ def run_method_cell(
             "cache_warning": False,
         }
 
-    prediction, report = (validated if method == "accelerated" else (validated, None))
+    prediction, report = validated if method == "accelerated" else (validated, None)
     diagnostics = validate_prediction(prediction, report=report)
     fields = _report_fields(report, expected_backend)
     if not diagnostics["validation_ok"]:

@@ -225,8 +225,10 @@ def run(
     skip_extras: bool = False,
     skip_lp_l2_zero: bool = False,
     output_dir: Path | None = None,
+    no_figures: Annotated[bool, typer.Option("--no-figures", hidden=True)] = False,
 ) -> None:
     """Native vs accelerated cross_val_predict on this checkout."""
+    del no_figures
     run_sweep(
         _build(
             dataset,

@@ -33,7 +33,7 @@ jobs:
         run: >
           python benchmark/run_relative.py
           --base "origin/${{ github.base_ref || 'main' }}"
-          --quick --workers 1 --no-figures
+          --quick --workers 1
       - name: Upload relative results
         if: always()
         uses: actions/upload-artifact@v7
